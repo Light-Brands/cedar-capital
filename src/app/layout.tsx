@@ -8,12 +8,16 @@ const jakarta = Plus_Jakarta_Sans({
   subsets: ['latin'],
   weight: ['400', '500', '600', '700'],
   variable: '--font-jakarta',
+  display: 'swap',
+  fallback: ['system-ui', 'Arial', 'sans-serif'],
 })
 
 const inter = Inter({
   subsets: ['latin'],
   weight: ['400', '500'],
   variable: '--font-inter',
+  display: 'swap',
+  fallback: ['system-ui', 'Arial', 'sans-serif'],
 })
 
 export const metadata: Metadata = {
