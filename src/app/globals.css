@@ -1,0 +1,141 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  /* Primary Colors */
+  --color-cedar-green: #0B3D2E;
+  --color-capital-gold: #C8A24A;
+
+  /* Secondary Colors */
+  --color-evergreen: #1F5B47;
+  --color-navy-ink: #0F2233;
+
+  /* Neutral Colors */
+  --color-cream: #F6F1E6;
+  --color-sand: #E9DDC7;
+  --color-stone: #D2C7B3;
+  --color-charcoal: #1F2933;
+
+  /* Utility Colors */
+  --color-success: #2F6F55;
+  --color-warning: #B07A2A;
+  --color-error: #A13A3A;
+  --color-info: #2B5C7A;
+
+  /* Button hover states */
+  --color-gold-hover: #B8923D;
+
+  /* Spacing */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 48px;
+  --space-8: 72px;
+  --space-9: 96px;
+
+  /* Border Radius */
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 20px;
+
+  /* Shadows */
+  --shadow-card: 0 2px 8px rgba(31, 41, 51, 0.08);
+  --shadow-elevated: 0 4px 16px rgba(31, 41, 51, 0.12);
+  --shadow-modal: 0 8px 32px rgba(31, 41, 51, 0.16);
+
+  /* Transitions */
+  --transition-quick: 200ms ease-out;
+  --transition-standard: 300ms ease-out;
+  --transition-entrance: 400ms ease-out;
+}
+
+@layer base {
+  html {
+    scroll-behavior: smooth;
+  }
+
+  body {
+    @apply bg-cream text-charcoal font-body;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    @apply font-heading text-cedar-green;
+  }
+
+  h1 {
+    @apply text-4xl md:text-5xl lg:text-[52px] font-bold leading-tight;
+  }
+
+  h2 {
+    @apply text-3xl md:text-4xl font-bold leading-snug;
+  }
+
+  h3 {
+    @apply text-2xl md:text-[28px] font-semibold leading-snug;
+  }
+
+  p {
+    @apply text-base md:text-lg leading-relaxed;
+  }
+
+  a {
+    @apply text-evergreen hover:text-cedar-green transition-colors duration-quick;
+  }
+}
+
+@layer components {
+  .container-content {
+    @apply max-w-content mx-auto px-4 md:px-6 lg:px-8;
+  }
+
+  .section {
+    @apply py-16 md:py-20 lg:py-24;
+  }
+
+  .section-alt {
+    @apply bg-sand;
+  }
+
+  .card {
+    @apply bg-sand border border-stone rounded-card p-6 shadow-card;
+  }
+
+  .card-elevated {
+    @apply bg-cream border border-stone rounded-card p-6 shadow-elevated;
+  }
+
+  .btn {
+    @apply inline-flex items-center justify-center px-6 py-3 rounded-button font-heading font-semibold text-base transition-all duration-standard;
+  }
+
+  .btn-primary {
+    @apply bg-cedar-green text-cream hover:bg-evergreen focus:ring-2 focus:ring-capital-gold focus:ring-offset-2 focus:ring-offset-cream;
+  }
+
+  .btn-secondary {
+    @apply bg-transparent border border-cedar-green text-cedar-green hover:bg-sand;
+  }
+
+  .btn-accent {
+    @apply bg-capital-gold text-navy-ink hover:bg-gold-hover;
+  }
+
+  .input {
+    @apply w-full bg-cream border border-stone rounded-input px-4 py-3 font-body text-charcoal placeholder:text-stone focus:border-cedar-green focus:outline-none focus:ring-2 focus:ring-capital-gold/20;
+  }
+
+  .label {
+    @apply block text-sm font-medium text-charcoal mb-2;
+  }
+
+  .gold-accent {
+    @apply w-12 h-1 bg-capital-gold rounded-full;
+  }
+}
