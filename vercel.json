@@ -3,6 +3,12 @@
   "framework": "nextjs",
   "buildCommand": "npm run build",
   "installCommand": "npm install",
+  "crons": [
+    { "path": "/api/cron/discover", "schedule": "0 */2 * * *" },
+    { "path": "/api/cron/enrich", "schedule": "15 */2 * * *" },
+    { "path": "/api/cron/analyze", "schedule": "30 */2 * * *" },
+    { "path": "/api/cron/outreach", "schedule": "45 */2 * * *" }
+  ],
   "headers": [
     {
       "source": "/(.*)",

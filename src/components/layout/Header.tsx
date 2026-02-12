@@ -11,6 +11,7 @@ const navigation = [
   { name: 'For Investors', href: '/investors' },
   { name: 'About', href: '/about' },
   { name: 'Contact', href: '/contact' },
+  { name: 'Dashboard', href: '/dashboard' },
 ]
 
 export default function Header() {
