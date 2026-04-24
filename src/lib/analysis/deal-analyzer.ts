@@ -9,6 +9,7 @@ import { estimateRehab, type RehabEstimate, type RehabLevel } from './rehab-esti
 import { calculateFinance, calculateSellingCosts, calculateMAO, DEFAULT_FINANCE, type FinanceDefaults } from './finance-calculator'
 import { scoreDeal, type ScoreResult } from './deal-scorer'
 import { type CompAnalysis } from './comps'
+import { scoreToBadge, type DealBadge } from './badge'
 
 export interface DealAnalysisInput {
   property: Property
@@ -19,6 +20,8 @@ export interface DealAnalysisInput {
   financeDefaults?: FinanceDefaults
   compAnalysis?: CompAnalysis
   distressSignal?: string
+  /** Nbhd avg $/sqft for this property's zip — ARV fallback + Discount% anchor */
+  zipAvgPerSqft?: number
 }
 
 export interface DealAnalysisResult {
@@ -60,6 +63,13 @@ export interface DealAnalysisResult {
 
   // Scoring
   score: ScoreResult
+  badge: DealBadge | null
+
+  // Kelly 36-col fields
+  discountPct: number | null
+  totalIn: number
+  grossProfit: number
+  verified: boolean
 
   // Comp data
   compAddresses: string[]
@@ -83,6 +93,7 @@ export function analyzeDeal(input: DealAnalysisInput): DealAnalysisResult {
   const sqft = property.sqft ?? 1500
 
   // Step 1: Determine ARV
+  // Fallback chain: explicit → comps → zestimate → tax-assessed × 1.1 → zip avg × sqft
   let arv = input.arv ?? 0
   if (!arv && compAnalysis?.estimatedARV) {
     arv = compAnalysis.estimatedARV
@@ -91,8 +102,10 @@ export function analyzeDeal(input: DealAnalysisInput): DealAnalysisResult {
     arv = property.zestimate
   }
   if (!arv && property.tax_assessed_value) {
-    // Conservative: assessed value * 1.1 as rough ARV
     arv = Math.round(property.tax_assessed_value * 1.1)
+  }
+  if (!arv && input.zipAvgPerSqft && sqft > 0) {
+    arv = Math.round(input.zipAvgPerSqft * sqft)
   }
 
   // Step 2: Estimate rehab (apply overrides if provided)
@@ -148,6 +161,18 @@ export function analyzeDeal(input: DealAnalysisInput): DealAnalysisResult {
     zipCode: property.zip_code ?? undefined,
   })
 
+  // Step 8: Kelly 36-col derived fields
+  const nbhdAvg = compAnalysis?.avgPricePerSqft ?? input.zipAvgPerSqft ?? 0
+  const listPerSqft = sqft > 0 && property.asking_price ? property.asking_price / sqft : 0
+  const discountPct = nbhdAvg > 0 && listPerSqft > 0
+    ? Math.round(((nbhdAvg - listPerSqft) / nbhdAvg) * 10000) / 100
+    : null
+  const totalIn = (property.asking_price ?? offerPrice) + rehab.total
+  const grossProfit = arv - totalIn
+  // Verified requires 3+ real sold comps; zip-stats-only analyses stay unverified.
+  const verified = (compAnalysis?.compCount ?? 0) >= 3
+  const badge = scoreToBadge(score.totalScore)
+
   return {
     offerPrice,
     offerPerSqft,
@@ -174,9 +199,14 @@ export function analyzeDeal(input: DealAnalysisInput): DealAnalysisResult {
     mao,
     wholesaleProfit,
     score,
+    badge,
+    discountPct,
+    totalIn,
+    grossProfit,
+    verified,
     compAddresses: compAnalysis?.compAddresses ?? [],
     compPrices: compAnalysis?.compPrices ?? [],
-    compAvgPerSqft: compAnalysis?.avgPricePerSqft ?? 0,
+    compAvgPerSqft: compAnalysis?.avgPricePerSqft ?? input.zipAvgPerSqft ?? 0,
   }
 }
 
@@ -233,5 +263,11 @@ export function toAnalysisInsert(
     comp_addresses: result.compAddresses,
     comp_prices: result.compPrices,
     comp_avg_per_sqft: result.compAvgPerSqft,
-  }
+    // Kelly 36-col fields (added by migration 001)
+    discount_pct: result.discountPct,
+    total_in: result.totalIn,
+    gross_profit: result.grossProfit,
+    verified: result.verified,
+    badge: result.badge,
+  } as AnalysisInsert
 }

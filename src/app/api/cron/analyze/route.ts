@@ -1,16 +1,31 @@
 /**
  * Cron: Analyze unanalyzed properties
- * Runs 30 minutes after discover. Runs the full deal analysis engine.
+ * Runs every 2 hours, 40 min after the discover pass.
+ *
+ * Strategy:
+ *   1. Load zip-level avg $/sqft from our own active-listings table.
+ *   2. Fetch the next batch of properties that don't yet have an analysis row.
+ *   3. Compute ARV via Kelly's formula (nbhd avg $/sqft × sqft) when no real comps.
+ *   4. Run analyzeDeal → insert analysis row with all Kelly 36-col fields + badge.
+ *   5. Loop until close to Vercel's 300s cap, then return.
+ *
+ * Verified flag stays false because we're using listing-based comp proxy,
+ * not sold-comp data. Once Rentcast AVM or ATTOM is available, comps take over
+ * and verified flips to true automatically.
  */
 
 export const dynamic = 'force-dynamic'
+export const maxDuration = 300
 
 import { NextRequest, NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase/client'
-import { getUnanalyzedProperties, getComps, getPropertyValuation } from '@/lib/api/sources'
 import { analyzeDeal, toAnalysisInsert } from '@/lib/analysis/deal-analyzer'
-import { filterComps, analyzeComps, type CompSale } from '@/lib/analysis/comps'
-import type { SalesComp } from '@/lib/api/types'
+import { loadZipStats } from '@/lib/analysis/zip-stats'
+import type { Property } from '@/lib/supabase/types'
+
+const TIME_BUDGET_MS = 270_000 // leave 30s for overhead
+const BATCH_SIZE = 500          // DB page size for fetching unanalyzed properties
+const MAX_ROUNDS = 20           // safety cap: max iterations
 
 export async function GET(request: NextRequest) {
   const authHeader = request.headers.get('authorization')
@@ -18,89 +33,106 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
+  const start = Date.now()
   const supabase = createServerClient()
 
   try {
-    const properties = await getUnanalyzedProperties(20)
-    let analyzed = 0
-    let failed = 0
+    // Load zip stats once for the whole run
+    const zipStats = await loadZipStats(supabase, 3)
 
-    for (const property of properties) {
-      try {
-        // Get valuation
-        const valuation = await getPropertyValuation(
-          property.address,
-          property.city,
-          property.state,
-          property.zip_code ?? ''
-        )
+    let totalAnalyzed = 0
+    let totalFailed = 0
+    let totalSkipped = 0
+    let roundsRan = 0
 
-        // Get comps
-        const rawComps = await getComps(property.address, property.zip_code ?? '')
-        const compSales: CompSale[] = rawComps.map((c: SalesComp) => ({
-          address: c.address,
-          salePrice: c.salePrice,
-          sqft: c.sqft,
-          beds: c.beds,
-          baths: c.baths,
-          saleDate: c.saleDate,
-          distanceMiles: c.distanceMiles,
-        }))
-
-        const filteredComps = filterComps(compSales, property.sqft ?? 1500)
-        const compAnalysis = analyzeComps(filteredComps, property.sqft ?? 1500)
-
-        // Run deal analysis
-        const arv = valuation?.estimatedValue ?? compAnalysis.estimatedARV ?? 0
-        const result = analyzeDeal({
-          property,
-          arv: arv > 0 ? arv : undefined,
-          compAnalysis: compAnalysis.compCount > 0 ? compAnalysis : undefined,
-          distressSignal: property.list_type ?? undefined,
-        })
-
-        // Save analysis
-        const insert = toAnalysisInsert(property.id, result)
-        const { data: analysisRow, error } = await supabase
-          .from('analyses')
-          .insert(insert)
-          .select('id')
-          .single()
-
-        if (error) {
-          console.error(`Failed to save analysis for ${property.address}:`, error)
-          failed++
-        } else {
-          analyzed++
-
-          // Auto-create pipeline entry for A/B deals
-          if (result.score.grade === 'A' || result.score.grade === 'B') {
-            await supabase.from('pipeline').upsert({
-              property_id: property.id,
-              analysis_id: analysisRow.id,
-              stage: 'new',
-              notes: `Auto-scored ${result.score.grade} (${result.score.totalScore}/100). ROI: ${result.roi}%`,
-            }, { onConflict: 'property_id' })
-          }
-        }
-      } catch (err) {
-        console.error(`Analysis error for ${property.address}:`, err)
-        failed++
+    for (let round = 0; round < MAX_ROUNDS; round++) {
+      if (Date.now() - start > TIME_BUDGET_MS) {
+        console.log(`[cron/analyze] time budget reached after ${round} rounds`)
+        break
       }
+
+      // Fetch properties that don't yet have an analysis.
+      // We use a left-join via .not('id', 'in', ...) style — but Supabase REST
+      // doesn't support that cleanly, so do two queries and diff client-side.
+      const { data: analyzedRows } = await supabase
+        .from('analyses')
+        .select('property_id')
+        .limit(50_000)
+      const analyzedIds = new Set((analyzedRows ?? []).map(r => r.property_id as string))
+
+      const { data: props, error: propErr } = await supabase
+        .from('properties')
+        .select('*')
+        .gt('asking_price', 0)
+        .gt('sqft', 0)
+        .order('created_at', { ascending: false })
+        .limit(BATCH_SIZE)
+
+      if (propErr) {
+        console.error('[cron/analyze] property fetch error:', propErr)
+        break
+      }
+
+      const candidates = (props ?? []).filter(p => !analyzedIds.has(p.id as string))
+      if (candidates.length === 0) {
+        console.log(`[cron/analyze] no more unanalyzed properties after ${round} rounds`)
+        break
+      }
+
+      for (const property of candidates) {
+        if (Date.now() - start > TIME_BUDGET_MS) break
+
+        try {
+          const zipStat = property.zip_code ? zipStats.get(property.zip_code) : undefined
+          const zipAvg = zipStat?.avgPerSqft
+
+          if (!zipAvg) {
+            totalSkipped++
+            continue
+          }
+
+          const result = analyzeDeal({
+            property: property as unknown as Property,
+            zipAvgPerSqft: zipAvg,
+            distressSignal: property.list_type ?? undefined,
+          })
+
+          const insert = toAnalysisInsert(property.id as string, result)
+          const { error: insertErr } = await supabase.from('analyses').insert(insert)
+          if (insertErr) {
+            console.error(`[cron/analyze] insert failed for ${property.address}:`, insertErr.message)
+            totalFailed++
+          } else {
+            totalAnalyzed++
+          }
+        } catch (err) {
+          console.error(`[cron/analyze] analyze error for ${property.address}:`, err)
+          totalFailed++
+        }
+      }
+
+      roundsRan = round + 1
+      // If the fetched batch was smaller than BATCH_SIZE, we've exhausted candidates in this pass
+      if (candidates.length < BATCH_SIZE) break
     }
 
+    const durationMs = Date.now() - start
     return NextResponse.json({
       success: true,
-      processed: properties.length,
-      analyzed,
-      failed,
       timestamp: new Date().toISOString(),
+      analyzed: totalAnalyzed,
+      failed: totalFailed,
+      skipped: totalSkipped,
+      rounds: roundsRan,
+      zipsInStats: zipStats.size,
+      durationMs,
     })
   } catch (err) {
-    console.error('Analyze cron error:', err)
+    const message = err instanceof Error ? err.message : String(err)
+    console.error('[cron/analyze] uncaught:', err)
     return NextResponse.json(
-      { error: 'Analysis failed', details: err instanceof Error ? err.message : 'Unknown error' },
-      { status: 500 }
+      { error: 'Analysis failed', details: message },
+      { status: 500 },
     )
   }
 }
