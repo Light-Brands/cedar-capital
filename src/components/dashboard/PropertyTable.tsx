@@ -5,7 +5,7 @@ import Link from 'next/link'
 import { clsx } from 'clsx'
 import ScoreBadge from './ScoreBadge'
 import { scoreToBadge } from '@/lib/analysis/badge'
-import { classifyUnitType, isParcelMismatchLikely, isMultiUnit } from '@/lib/analysis/property-classifier'
+import { classifyUnitType, isParcelMismatchLikely, isMultiUnit, isAuctionLikely } from '@/lib/analysis/property-classifier'
 import { classifyOwner } from '@/lib/analysis/owner-classifier'
 import { toZillowUrl, toRealtorUrl, toGoogleMapsUrl, toTcadUrl } from '@/lib/external-links'
 import { toCsv, downloadCsv, type CsvColumn } from '@/lib/csv'
@@ -187,6 +187,13 @@ const COLUMNS: ColumnDef[] = [
         beds: p.beds,
       })
       const mismatch = isParcelMismatchLikely(unitType, p.market_value, p.asking_price)
+      const auction = isAuctionLikely({
+        list_type: p.list_type,
+        property_type: p.property_type,
+        notes: p.notes,
+        asking_price: p.asking_price,
+        market_value: p.market_value,
+      })
       return (
         <div className="flex items-center gap-1.5 overflow-hidden">
           {isNew24h(p.created_at) && (
@@ -210,6 +217,14 @@ const COLUMNS: ColumnDef[] = [
           >
             {unitType}
           </span>
+          {auction.likely && (
+            <span
+              title={`Likely auction / foreclosure — ${auction.reason}. The asking price may be a start bid, not a real ask.`}
+              className="flex-shrink-0 text-[10px] px-1 py-0.5 rounded bg-red-50 text-red-700 border border-red-300 font-medium"
+            >
+              🔨 Auction?
+            </span>
+          )}
           {mismatch && (
             <span
               title="TCAD market_value looks like a whole-building parcel, not this unit. Run Comps for a real sold-comp ARV."

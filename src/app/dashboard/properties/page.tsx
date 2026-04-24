@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { clsx } from 'clsx'
 import { supabase } from '@/lib/supabase/client'
 import { normalizeRelations } from '@/lib/supabase/normalize'
-import { classifyUnitType, isParcelMismatchLikely } from '@/lib/analysis/property-classifier'
+import { classifyUnitType, isParcelMismatchLikely, isAuctionLikely } from '@/lib/analysis/property-classifier'
 import { classifyOwner, type OwnerType } from '@/lib/analysis/owner-classifier'
 import { useLocalStorage } from '@/lib/use-local-storage'
 import PropertyTable, {
@@ -17,6 +17,7 @@ type BadgeFilter = '' | 'Perfect Fit' | 'Strong Match' | 'Could Work' | 'Needs a
 type ReviewFilter = '' | 'New' | 'Reviewed' | 'Contacted' | 'Dead'
 type UnitFilter = '' | 'SFR' | 'Condo' | 'Townhouse' | 'Duplex' | 'Multi' | 'Land'
 type OwnerFilter = '' | OwnerType
+type CompsFilter = '' | 'has' | 'none'
 
 interface Filters {
   badge: BadgeFilter
@@ -30,12 +31,15 @@ interface Filters {
   ownerType: OwnerFilter
   absenteeOnly: boolean
   hasDistress: boolean
+  comps: CompsFilter
+  hideAuctions: boolean
 }
 
 const EMPTY_FILTERS: Filters = {
   badge: '', review: '', zip: '', listType: '', source: '',
   fsboOnly: false, unitType: '', hideMismatch: false,
   ownerType: '', absenteeOnly: false, hasDistress: false,
+  comps: '', hideAuctions: false,
 }
 
 /**
@@ -246,6 +250,45 @@ export default function PropertiesPage() {
     // Owner type filter (derived from owner_name — client-side classifier)
     if (filters.ownerType) {
       loaded = loaded.filter(r => classifyOwner(r.owner_name) === filters.ownerType)
+    }
+
+    // Has-comps / no-comps filter (client-side — the nested filter is awkward
+    // across both query paths, and the analysis rows are already on the page).
+    if (filters.comps === 'has') {
+      loaded = loaded.filter(r => {
+        const a = r.analyses?.[0]
+        return Boolean(a && a.comp_addresses && a.comp_addresses.length > 0)
+      })
+    } else if (filters.comps === 'none') {
+      loaded = loaded.filter(r => {
+        const a = r.analyses?.[0]
+        return !a || !a.comp_addresses || a.comp_addresses.length === 0
+      })
+    }
+
+    // Hide likely-auction rows — asking price < 50% of TCAD market, or
+    // list_type / notes contain auction/foreclosure keywords.
+    if (filters.hideAuctions) {
+      loaded = loaded.filter(r => !isAuctionLikely({
+        list_type: r.list_type,
+        property_type: r.property_type,
+        notes: r.notes,
+        asking_price: r.asking_price,
+        market_value: r.market_value,
+      }).likely)
+    }
+
+    // Always bring has-comps rows to the top as a SECONDARY sort when the
+    // user hasn't explicitly filtered by comps. Kelly said "sort so the ones
+    // with comps come first" — this makes it automatic.
+    if (filters.comps !== 'none') {
+      const hasComps = (r: FullPropertyRow) =>
+        Boolean(r.analyses?.[0]?.comp_addresses?.length)
+      loaded = [...loaded].sort((a, b) => {
+        const aHas = hasComps(a) ? 1 : 0
+        const bHas = hasComps(b) ? 1 : 0
+        return bHas - aHas // has-comps wins the tiebreaker (0 if both same)
+      })
     }
 
     // Client-side filters for type classifier (derived from multiple columns)
@@ -494,6 +537,17 @@ export default function PropertiesPage() {
           <option value="Unknown">Unknown</option>
         </select>
 
+        <select
+          value={filters.comps}
+          onChange={e => setFilters(prev => ({ ...prev, comps: e.target.value as CompsFilter }))}
+          className="input w-auto"
+          title="Filter by whether real sold comps have been pulled. With-comps rows also float to the top automatically."
+        >
+          <option value="">All Comps</option>
+          <option value="has">📊 Has Comps</option>
+          <option value="none">No Comps Yet</option>
+        </select>
+
         <label className="flex items-center gap-1.5 text-sm text-charcoal cursor-pointer select-none">
           <input
             type="checkbox"
@@ -541,6 +595,19 @@ export default function PropertiesPage() {
             className="accent-red-500"
           />
           ⚠ Distress only
+        </label>
+
+        <label
+          className="flex items-center gap-1.5 text-sm text-charcoal cursor-pointer select-none"
+          title="Hide auction / foreclosure / REO listings — those 'great prices' are really start bids, not real asks"
+        >
+          <input
+            type="checkbox"
+            checked={filters.hideAuctions}
+            onChange={e => setFilters(prev => ({ ...prev, hideAuctions: e.target.checked }))}
+            className="accent-red-500"
+          />
+          🔨 Hide auctions
         </label>
 
         {activeFilters > 0 && (

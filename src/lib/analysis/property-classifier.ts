@@ -85,3 +85,43 @@ export function isParcelMismatchLikely(
   if (type === 'SFR') return ratio > 5
   return false
 }
+
+/**
+ * Auction detector: flags listings where the "asking price" is really an
+ * auction start bid / foreclosure opening, not a real ask. Those look like
+ * huge discounts but aren't — the property will sell at the actual bid +
+ * buyer's premium, or the bank has a much higher reserve.
+ *
+ * Signals, in priority order:
+ *   1. Explicit list_type says auction/foreclosure/short sale/REO
+ *   2. Keyword match in property_type or notes
+ *   3. Price ratio < 50% of TCAD market value — no legit listing is this low
+ *      outside of an auction or a severely distressed REO
+ */
+export function isAuctionLikely(input: {
+  list_type?: string | null
+  property_type?: string | null
+  notes?: string | null
+  asking_price?: number | null
+  market_value?: number | null
+  appraised_value?: number | null
+  tax_assessed_value?: number | null
+}): { likely: boolean; reason: string | null } {
+  const explicit = (input.list_type ?? '').toLowerCase()
+  if (/auction|foreclosure|short.sale|reo|bank.owned|trustee|sheriff/.test(explicit)) {
+    return { likely: true, reason: input.list_type ?? 'Auction/foreclosure' }
+  }
+  const context = [input.property_type, input.notes].filter(Boolean).join(' ').toLowerCase()
+  if (/\bauction\b|\bforeclosure\b|\bshort sale\b|\breo\b|opening bid|starting bid|trustee sale/.test(context)) {
+    return { likely: true, reason: 'auction/foreclosure keyword in listing' }
+  }
+  const asking = input.asking_price
+  const reference = input.market_value ?? input.appraised_value ?? input.tax_assessed_value
+  if (asking && reference && asking > 0 && reference > 0) {
+    const ratio = asking / reference
+    if (ratio < 0.5) {
+      return { likely: true, reason: `asking is ${Math.round(ratio * 100)}% of market — possible auction/foreclosure` }
+    }
+  }
+  return { likely: false, reason: null }
+}
