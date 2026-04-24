@@ -24,8 +24,8 @@ import { loadZipStats } from '@/lib/analysis/zip-stats'
 import type { Property } from '@/lib/supabase/types'
 
 const TIME_BUDGET_MS = 270_000 // leave 30s for overhead
-const BATCH_SIZE = 500          // DB page size for fetching unanalyzed properties
-const MAX_ROUNDS = 20           // safety cap: max iterations
+const BATCH_SIZE = 500          // DB page size per round
+const MAX_ROUNDS = 30           // safety cap: 30 * 500 = 15,000 properties per run
 
 export async function GET(request: NextRequest) {
   const authHeader = request.headers.get('authorization')
@@ -45,39 +45,34 @@ export async function GET(request: NextRequest) {
     let totalSkipped = 0
     let roundsRan = 0
 
+    // Load every already-analyzed property_id once (cheap: single col, paged).
+    const analyzedIds = await loadAllAnalyzedIds(supabase)
+
+    // Paginate through properties (id-ordered for stable paging).
+    // Each round fetches the next slice and filters out already-analyzed ids.
     for (let round = 0; round < MAX_ROUNDS; round++) {
       if (Date.now() - start > TIME_BUDGET_MS) {
         console.log(`[cron/analyze] time budget reached after ${round} rounds`)
         break
       }
 
-      // Fetch properties that don't yet have an analysis.
-      // We use a left-join via .not('id', 'in', ...) style — but Supabase REST
-      // doesn't support that cleanly, so do two queries and diff client-side.
-      const { data: analyzedRows } = await supabase
-        .from('analyses')
-        .select('property_id')
-        .limit(50_000)
-      const analyzedIds = new Set((analyzedRows ?? []).map(r => r.property_id as string))
-
       const { data: props, error: propErr } = await supabase
         .from('properties')
         .select('*')
         .gt('asking_price', 0)
         .gt('sqft', 0)
-        .order('created_at', { ascending: false })
-        .limit(BATCH_SIZE)
+        .order('id', { ascending: true })
+        .range(round * BATCH_SIZE, (round + 1) * BATCH_SIZE - 1)
 
       if (propErr) {
         console.error('[cron/analyze] property fetch error:', propErr)
         break
       }
 
-      const candidates = (props ?? []).filter(p => !analyzedIds.has(p.id as string))
-      if (candidates.length === 0) {
-        console.log(`[cron/analyze] no more unanalyzed properties after ${round} rounds`)
-        break
-      }
+      const page = props ?? []
+      if (page.length === 0) break
+
+      const candidates = page.filter(p => !analyzedIds.has(p.id as string))
 
       for (const property of candidates) {
         if (Date.now() - start > TIME_BUDGET_MS) break
@@ -104,6 +99,7 @@ export async function GET(request: NextRequest) {
             totalFailed++
           } else {
             totalAnalyzed++
+            analyzedIds.add(property.id as string)
           }
         } catch (err) {
           console.error(`[cron/analyze] analyze error for ${property.address}:`, err)
@@ -112,8 +108,8 @@ export async function GET(request: NextRequest) {
       }
 
       roundsRan = round + 1
-      // If the fetched batch was smaller than BATCH_SIZE, we've exhausted candidates in this pass
-      if (candidates.length < BATCH_SIZE) break
+      // End of table reached
+      if (page.length < BATCH_SIZE) break
     }
 
     const durationMs = Date.now() - start
@@ -135,4 +131,21 @@ export async function GET(request: NextRequest) {
       { status: 500 },
     )
   }
+}
+
+async function loadAllAnalyzedIds(supabase: ReturnType<typeof createServerClient>): Promise<Set<string>> {
+  const ids = new Set<string>()
+  const perPage = 1000
+  let offset = 0
+  while (true) {
+    const { data } = await supabase
+      .from('analyses')
+      .select('property_id')
+      .range(offset, offset + perPage - 1)
+    if (!data || data.length === 0) break
+    for (const row of data) ids.add(row.property_id as string)
+    if (data.length < perPage) break
+    offset += perPage
+  }
+  return ids
 }
