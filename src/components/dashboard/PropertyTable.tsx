@@ -69,6 +69,36 @@ interface Props {
   sortOrder?: 'asc' | 'desc'
   onSort?: (key: string) => void
   onReviewStatusChange?: (id: string, status: string) => void
+  onEnriched?: (id: string, source: 'batchdata' | 'rentcast_avm', result: EnrichmentResult) => void
+}
+
+export interface EnrichmentResult {
+  ok: boolean
+  source?: string
+  message?: string
+  error?: string
+  owner?: {
+    name?: string
+    phones?: string[]
+    emails?: string[]
+    isAbsentee?: boolean
+    ownershipLengthYears?: number
+    estimatedEquity?: number
+  }
+  distress?: string | null
+  compCount?: number
+  estimatedARV?: number
+  verified?: boolean
+  reanalysis?: {
+    arv: number
+    roi: number
+    mao: number
+    wholesale_profit: number
+    discount_pct: number | null
+    verified: boolean
+    deal_score_numeric: number
+    badge: string | null
+  } | null
 }
 
 // ============================================================
@@ -290,6 +320,88 @@ const REVIEW_STYLES: Record<string, string> = {
   Dead: 'bg-stone-100 text-stone-500 border-stone-300 line-through',
 }
 
+// ============================================================
+// Per-row enrichment buttons
+// ============================================================
+
+type EnrichState = 'idle' | 'loading' | 'done' | 'failed'
+
+function EnrichButtons({
+  propertyId,
+  onEnriched,
+}: {
+  propertyId: string
+  onEnriched?: (id: string, source: 'batchdata' | 'rentcast_avm', result: EnrichmentResult) => void
+}) {
+  const [ownerState, setOwnerState] = useState<EnrichState>('idle')
+  const [compsState, setCompsState] = useState<EnrichState>('idle')
+  const [lastMessage, setLastMessage] = useState<string | null>(null)
+
+  async function trigger(source: 'batchdata' | 'rentcast_avm') {
+    const setState = source === 'batchdata' ? setOwnerState : setCompsState
+    setState('loading')
+    setLastMessage(null)
+    try {
+      const res = await fetch(`/api/properties/${propertyId}/enrich/${source}`, { method: 'POST' })
+      const data = (await res.json()) as EnrichmentResult
+      if (data.ok) {
+        setState('done')
+        if (source === 'batchdata') {
+          const phones = data.owner?.phones?.length ?? 0
+          setLastMessage(`${phones} phone${phones === 1 ? '' : 's'}${data.distress ? ` · ${data.distress}` : ''}`)
+        } else {
+          setLastMessage(`${data.compCount ?? 0} comps${data.verified ? ' ✓' : ''}`)
+        }
+      } else {
+        setState('failed')
+        setLastMessage(data.message ?? data.error ?? 'failed')
+      }
+      if (onEnriched) onEnriched(propertyId, source, data)
+    } catch (err) {
+      setState('failed')
+      setLastMessage(err instanceof Error ? err.message : 'failed')
+    }
+  }
+
+  return (
+    <div className="flex flex-col gap-1" onClick={e => e.stopPropagation()}>
+      <div className="flex gap-1">
+        <button
+          type="button"
+          onClick={() => trigger('batchdata')}
+          disabled={ownerState === 'loading'}
+          title="Skip trace via BatchData — owner phone, email, distress signals"
+          className={clsx(
+            'text-[10px] font-semibold px-2 py-0.5 rounded border transition-colors whitespace-nowrap',
+            ownerState === 'loading' && 'bg-stone-100 text-stone-500 border-stone-300',
+            ownerState === 'idle' && 'bg-white text-cedar-green border-cedar-green/30 hover:bg-cedar-green/5',
+            ownerState === 'done' && 'bg-emerald-50 text-emerald-800 border-emerald-300',
+            ownerState === 'failed' && 'bg-red-50 text-red-700 border-red-300',
+          )}
+        >
+          {ownerState === 'loading' ? '…' : ownerState === 'done' ? '✓' : ownerState === 'failed' ? '✕' : '📞'} Owner
+        </button>
+        <button
+          type="button"
+          onClick={() => trigger('rentcast_avm')}
+          disabled={compsState === 'loading'}
+          title="Rentcast AVM — real sold comps within 0.5 mi, refined ARV, verified flag"
+          className={clsx(
+            'text-[10px] font-semibold px-2 py-0.5 rounded border transition-colors whitespace-nowrap',
+            compsState === 'loading' && 'bg-stone-100 text-stone-500 border-stone-300',
+            compsState === 'idle' && 'bg-white text-cedar-green border-cedar-green/30 hover:bg-cedar-green/5',
+            compsState === 'done' && 'bg-emerald-50 text-emerald-800 border-emerald-300',
+            compsState === 'failed' && 'bg-red-50 text-red-700 border-red-300',
+          )}
+        >
+          {compsState === 'loading' ? '…' : compsState === 'done' ? '✓' : compsState === 'failed' ? '✕' : '📊'} Comps
+        </button>
+      </div>
+      {lastMessage && <span className="text-[10px] text-charcoal/60">{lastMessage}</span>}
+    </div>
+  )
+}
+
 function ReviewChip({ status, onCycle }: { status: string | null; onCycle: () => void }) {
   const s = status ?? 'New'
   return (
@@ -311,7 +423,7 @@ function ReviewChip({ status, onCycle }: { status: string | null; onCycle: () =>
 // Main table
 // ============================================================
 
-export default function PropertyTable({ rows, sortColumn, sortOrder, onSort, onReviewStatusChange }: Props) {
+export default function PropertyTable({ rows, sortColumn, sortOrder, onSort, onReviewStatusChange, onEnriched }: Props) {
   const [visible, setVisible] = useState<Set<string>>(
     () => new Set(COLUMNS.filter(c => c.defaultVisible).map(c => c.key))
   )
@@ -393,6 +505,7 @@ export default function PropertyTable({ rows, sortColumn, sortOrder, onSort, onR
           <thead className="bg-sand/40">
             <tr className="border-b border-stone/30">
               <th className="text-left py-2 px-3 font-heading font-semibold text-charcoal/70 text-xs uppercase tracking-wide">Triage</th>
+              <th className="text-left py-2 px-3 font-heading font-semibold text-charcoal/70 text-xs uppercase tracking-wide whitespace-nowrap">Enrich</th>
               {visibleColumns.map(col => {
                 const isSorted = sortColumn === col.key
                 return (
@@ -420,6 +533,9 @@ export default function PropertyTable({ rows, sortColumn, sortOrder, onSort, onR
                 <td className="py-2 px-3 align-top">
                   <ReviewChip status={row.review_status} onCycle={() => handleReviewCycle(row.id, row.review_status)} />
                 </td>
+                <td className="py-2 px-3 align-top">
+                  <EnrichButtons propertyId={row.id} onEnriched={onEnriched} />
+                </td>
                 {visibleColumns.map(col => (
                   <td key={col.key} className="py-2 px-3 align-top whitespace-nowrap">
                     {col.render(row)}
@@ -429,7 +545,7 @@ export default function PropertyTable({ rows, sortColumn, sortOrder, onSort, onR
             ))}
             {rows.length === 0 && (
               <tr>
-                <td colSpan={visibleColumns.length + 1} className="py-12 text-center text-charcoal/50">
+                <td colSpan={visibleColumns.length + 2} className="py-12 text-center text-charcoal/50">
                   No properties match your filters.
                 </td>
               </tr>

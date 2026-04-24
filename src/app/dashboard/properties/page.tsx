@@ -3,7 +3,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { supabase } from '@/lib/supabase/client'
 import { normalizeRelations } from '@/lib/supabase/normalize'
-import PropertyTable, { type FullPropertyRow } from '@/components/dashboard/PropertyTable'
+import PropertyTable, {
+  type FullPropertyRow,
+  type EnrichmentResult,
+} from '@/components/dashboard/PropertyTable'
 import RefreshButton from '@/components/dashboard/RefreshButton'
 
 type BadgeFilter = '' | 'Perfect Fit' | 'Strong Match' | 'Could Work' | 'Needs a Reason' | 'Pass'
@@ -158,6 +161,37 @@ export default function PropertiesPage() {
     }
   }
 
+  /**
+   * Live-update the row's analysis when per-row enrichment completes so the
+   * user sees the badge/score/ARV change inline. The server already re-ran
+   * analyze and returned the fresh numbers — we just merge them into state.
+   */
+  function handleEnriched(id: string, source: 'batchdata' | 'rentcast_avm', result: EnrichmentResult) {
+    if (!result.ok || !result.reanalysis) return
+    const fresh = result.reanalysis
+    setRows(prev => prev.map(r => {
+      if (r.id !== id) return r
+      const existing = r.analyses?.[0] ?? {}
+      const merged = {
+        ...existing,
+        arv: fresh.arv,
+        roi: fresh.roi,
+        mao: fresh.mao,
+        wholesale_profit: fresh.wholesale_profit,
+        discount_pct: fresh.discount_pct,
+        verified: fresh.verified,
+        deal_score_numeric: fresh.deal_score_numeric,
+        badge: fresh.badge,
+      }
+      const updates: Partial<FullPropertyRow> = { analyses: [merged] as unknown as FullPropertyRow['analyses'] }
+      if (source === 'batchdata' && result.distress) {
+        // Owner enrichment may also patch distress signal into the row
+        // (not rendered as a column yet, but available for future use)
+      }
+      return { ...r, ...updates }
+    }))
+  }
+
   async function handleReviewStatusChange(id: string, status: string) {
     // Optimistic update
     setRows(prev => prev.map(r => r.id === id ? { ...r, review_status: status } : r))
@@ -288,6 +322,7 @@ export default function PropertiesPage() {
           sortOrder={sortOrder}
           onSort={handleSort}
           onReviewStatusChange={handleReviewStatusChange}
+          onEnriched={handleEnriched}
         />
       )}
     </div>

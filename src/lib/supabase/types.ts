@@ -103,12 +103,15 @@ export interface Property {
   appraised_value: number | null
   deed_date: string | null
   tcad_updated_at: string | null
+  // Added by migration 005_manual_enrichment
+  distress_signal: string | null
+  last_enriched_at: string | null
   created_at: string
   updated_at: string
 }
 
 export type PropertyInsert =
-  Omit<Property, 'id' | 'created_at' | 'updated_at' | 'special_features' | 'agent_name' | 'agent_phone' | 'agent_email' | 'listing_status' | 'review_status' | 'notes' | 'licensing_tag' | 'tcad_prop_id' | 'tcad_geo_id' | 'owner_name' | 'owner_mailing_address' | 'is_absentee' | 'has_homestead_exemption' | 'market_value' | 'appraised_value' | 'deed_date' | 'tcad_updated_at'> & {
+  Omit<Property, 'id' | 'created_at' | 'updated_at' | 'special_features' | 'agent_name' | 'agent_phone' | 'agent_email' | 'listing_status' | 'review_status' | 'notes' | 'licensing_tag' | 'tcad_prop_id' | 'tcad_geo_id' | 'owner_name' | 'owner_mailing_address' | 'is_absentee' | 'has_homestead_exemption' | 'market_value' | 'appraised_value' | 'deed_date' | 'tcad_updated_at' | 'distress_signal' | 'last_enriched_at'> & {
     id?: string
     created_at?: string
     updated_at?: string
@@ -132,6 +135,9 @@ export type PropertyInsert =
     appraised_value?: number | null
     deed_date?: string | null
     tcad_updated_at?: string | null
+    // Migration 005 fields
+    distress_signal?: string | null
+    last_enriched_at?: string | null
   }
 
 export type PropertyUpdate = Partial<PropertyInsert>
