@@ -1,6 +1,7 @@
 'use client'
 
 import type { Analysis } from '@/lib/supabase/types'
+import { toZillowUrl, toGoogleMapsUrl } from '@/lib/external-links'
 
 interface AnalysisPanelProps {
   analysis: Analysis
@@ -162,21 +163,47 @@ export default function AnalysisPanel({ analysis }: AnalysisPanelProps) {
         </div>
       </div>
 
-      {/* Comps */}
+      {/* Comps — each address links to Zillow for fast verification */}
       {analysis.comp_addresses && analysis.comp_addresses.length > 0 && (
         <div className="bg-white border border-stone/30 rounded-card p-5">
           <h3 className="font-heading font-semibold text-cedar-green mb-4">
             Comparable Sales ({analysis.comp_addresses.length})
           </h3>
           <div className="space-y-2 text-sm">
-            {analysis.comp_addresses.map((addr, i) => (
-              <div key={i} className="flex justify-between">
-                <span className="text-charcoal/70">{addr}</span>
-                <span className="font-medium">
-                  {analysis.comp_prices?.[i] ? fmt(analysis.comp_prices[i]) : '-'}
-                </span>
-              </div>
-            ))}
+            {analysis.comp_addresses.map((addr, i) => {
+              const zillowUrl = toZillowUrl(addr)
+              const mapsUrl = toGoogleMapsUrl(addr)
+              return (
+                <div key={i} className="flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-1.5 min-w-0 flex-1">
+                    {zillowUrl ? (
+                      <a
+                        href={zillowUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-cedar-green hover:underline truncate"
+                        title="Open this comp on Zillow"
+                      >
+                        {addr}
+                      </a>
+                    ) : (
+                      <span className="text-charcoal/70 truncate">{addr}</span>
+                    )}
+                    <span className="flex gap-1 flex-shrink-0">
+                      {zillowUrl && (
+                        <a href={zillowUrl} target="_blank" rel="noreferrer" title="Zillow" className="text-[10px] px-1 py-0.5 border border-cedar-green/30 text-cedar-green rounded hover:bg-cedar-green/10">Z</a>
+                      )}
+                      {mapsUrl && (
+                        <a href={mapsUrl} target="_blank" rel="noreferrer" title="Google Maps" className="text-[10px] px-1 py-0.5 border border-cedar-green/30 text-cedar-green rounded hover:bg-cedar-green/10">🗺</a>
+                      )}
+                    </span>
+                  </div>
+                  <span className="font-medium flex-shrink-0">
+                    {analysis.comp_prices?.[i] ? fmt(analysis.comp_prices[i]) : '-'}
+                  </span>
+                </div>
+              )
+            })}
             {analysis.comp_avg_per_sqft && (
               <div className="flex justify-between border-t border-stone/20 pt-2 mt-2 font-medium">
                 <span>Avg $/sqft</span>

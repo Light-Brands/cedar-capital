@@ -415,7 +415,7 @@ const COLUMNS: ColumnDef[] = [
     const v = p.analyses?.[0]?.wholesale_profit
     return <span className={clsx('font-semibold', (v ?? 0) > 10000 ? 'text-emerald-700' : 'text-charcoal')}>{fmtUSD(v)}</span>
   }, csv: (p) => p.analyses?.[0]?.wholesale_profit ?? null },
-  // 30/31/32 — Comps 1-3
+  // 30/31/32 — Comps 1-3 (address clickable → Zillow)
   ...[0, 1, 2].map((i): ColumnDef => ({
     key: `comp_${i+1}`,
     header: `Comp ${i+1}`,
@@ -424,7 +424,22 @@ const COLUMNS: ColumnDef[] = [
       const addr = p.analyses?.[0]?.comp_addresses?.[i]
       const price = p.analyses?.[0]?.comp_prices?.[i]
       if (!addr) return <span className="text-charcoal/40">-</span>
-      return <span className="text-xs">{addr}{price ? ` · ${fmtUSDCompact(price)}` : ''}</span>
+      const zillowUrl = toZillowUrl(addr)
+      const priceTag = price ? ` · ${fmtUSDCompact(price)}` : ''
+      return zillowUrl ? (
+        <a
+          href={zillowUrl}
+          target="_blank"
+          rel="noreferrer"
+          className="text-xs text-cedar-green hover:underline"
+          title={`Open "${addr}" on Zillow`}
+          onClick={(e) => e.stopPropagation()}
+        >
+          {addr}{priceTag}
+        </a>
+      ) : (
+        <span className="text-xs">{addr}{priceTag}</span>
+      )
     },
     csv: (p) => {
       const addr = p.analyses?.[0]?.comp_addresses?.[i]
