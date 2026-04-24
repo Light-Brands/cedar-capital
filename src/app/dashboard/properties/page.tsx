@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { supabase } from '@/lib/supabase/client'
 import { normalizeRelations } from '@/lib/supabase/normalize'
 import { classifyUnitType, isParcelMismatchLikely } from '@/lib/analysis/property-classifier'
+import { classifyOwner, type OwnerType } from '@/lib/analysis/owner-classifier'
 import PropertyTable, {
   type FullPropertyRow,
   type EnrichmentResult,
@@ -13,6 +14,7 @@ import RefreshButton from '@/components/dashboard/RefreshButton'
 type BadgeFilter = '' | 'Perfect Fit' | 'Strong Match' | 'Could Work' | 'Needs a Reason' | 'Pass'
 type ReviewFilter = '' | 'New' | 'Reviewed' | 'Contacted' | 'Dead'
 type UnitFilter = '' | 'SFR' | 'Condo' | 'Townhouse' | 'Duplex' | 'Multi' | 'Land'
+type OwnerFilter = '' | OwnerType
 
 export default function PropertiesPage() {
   const [rows, setRows] = useState<FullPropertyRow[]>([])
@@ -26,6 +28,9 @@ export default function PropertiesPage() {
     fsboOnly: false,
     unitType: '' as UnitFilter,
     hideMismatch: false,
+    ownerType: '' as OwnerFilter,
+    absenteeOnly: false,
+    hasDistress: false,
   })
   const [zipInput, setZipInput] = useState('')
   const [sortColumn, setSortColumn] = useState<string>('date')
@@ -67,7 +72,8 @@ export default function PropertiesPage() {
         id, address, city, zip_code, beds, baths, sqft, lot_size, asking_price, list_type,
         property_type, market_value, source, link, days_on_market, created_at,
         listing_status, review_status, agent_name, agent_phone, agent_email,
-        special_features, notes,
+        owner_name, owner_mailing_address, is_absentee, has_homestead_exemption,
+        distress_signal, special_features, notes,
         ${analysesSelect}
       `)
       .order('created_at', { ascending: sortOrder === 'asc' })
@@ -79,6 +85,8 @@ export default function PropertiesPage() {
     if (filters.review) query = query.eq('review_status', filters.review)
     if (filters.fsboOnly) query = query.eq('list_type', 'FSBO')
     if (filters.badge) query = query.eq('analyses.badge', filters.badge)
+    if (filters.absenteeOnly) query = query.eq('is_absentee', true)
+    if (filters.hasDistress) query = query.not('distress_signal', 'is', null)
 
     const { data, error } = await query
     if (error) {
@@ -94,6 +102,11 @@ export default function PropertiesPage() {
       (data ?? []) as unknown as Record<string, unknown>[],
       ['analyses'],
     ) as unknown as FullPropertyRow[]
+
+    // Owner type filter (derived from owner_name — client-side classifier)
+    if (filters.ownerType) {
+      loaded = loaded.filter(r => classifyOwner(r.owner_name) === filters.ownerType)
+    }
 
     // Client-side filters for type classifier (derived from multiple columns)
     if (filters.unitType) {
@@ -332,6 +345,20 @@ export default function PropertiesPage() {
           <option value="Land">Land</option>
         </select>
 
+        <select
+          value={filters.ownerType}
+          onChange={e => setFilters(prev => ({ ...prev, ownerType: e.target.value as OwnerFilter }))}
+          className="input w-auto"
+          title="Owner type from TCAD — Individuals are most workable for cold outreach"
+        >
+          <option value="">All Owners</option>
+          <option value="Individual">👤 Individual</option>
+          <option value="Trust">📜 Trust</option>
+          <option value="Entity">🏢 LLC / Entity</option>
+          <option value="Government">🏛 Government</option>
+          <option value="Unknown">Unknown</option>
+        </select>
+
         <label className="flex items-center gap-1.5 text-sm text-charcoal cursor-pointer select-none">
           <input
             type="checkbox"
@@ -355,10 +382,36 @@ export default function PropertiesPage() {
           Hide parcel-mismatch
         </label>
 
+        <label
+          className="flex items-center gap-1.5 text-sm text-charcoal cursor-pointer select-none"
+          title="Absentee owner (mailing address differs from property) — wholesaler prime target"
+        >
+          <input
+            type="checkbox"
+            checked={filters.absenteeOnly}
+            onChange={e => setFilters(prev => ({ ...prev, absenteeOnly: e.target.checked }))}
+            className="accent-capital-gold"
+          />
+          ✈ Absentee only
+        </label>
+
+        <label
+          className="flex items-center gap-1.5 text-sm text-charcoal cursor-pointer select-none"
+          title="Distress signal detected (pre-foreclosure, tax-delinquent, probate, vacant, etc.)"
+        >
+          <input
+            type="checkbox"
+            checked={filters.hasDistress}
+            onChange={e => setFilters(prev => ({ ...prev, hasDistress: e.target.checked }))}
+            className="accent-red-500"
+          />
+          ⚠ Distress only
+        </label>
+
         {activeFilters > 0 && (
           <button
             onClick={() => {
-              setFilters({ badge: '', review: '', zip: '', listType: '', source: '', fsboOnly: false, unitType: '', hideMismatch: false })
+              setFilters({ badge: '', review: '', zip: '', listType: '', source: '', fsboOnly: false, unitType: '', hideMismatch: false, ownerType: '', absenteeOnly: false, hasDistress: false })
               setZipInput('')
             }}
             className="text-sm text-charcoal/60 hover:text-charcoal"

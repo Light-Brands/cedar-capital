@@ -6,6 +6,7 @@ import { clsx } from 'clsx'
 import ScoreBadge from './ScoreBadge'
 import { scoreToBadge } from '@/lib/analysis/badge'
 import { classifyUnitType, isParcelMismatchLikely, isMultiUnit } from '@/lib/analysis/property-classifier'
+import { classifyOwner } from '@/lib/analysis/owner-classifier'
 import { toCsv, downloadCsv, type CsvColumn } from '@/lib/csv'
 
 /**
@@ -37,6 +38,11 @@ export interface FullPropertyRow {
   agent_name: string | null
   agent_phone: string | null
   agent_email: string | null
+  owner_name: string | null
+  owner_mailing_address: string | null
+  is_absentee: boolean | null
+  has_homestead_exemption: boolean | null
+  distress_signal: string | null
   special_features: string[] | null
   notes: string | null
   // analyses (array because of the Supabase relation; we take [0])
@@ -352,6 +358,35 @@ const COLUMNS: ColumnDef[] = [
     if (!name && !phone) return <span className="text-charcoal/40">-</span>
     return <span className="text-xs">{name}{phone ? ` · ${phone}` : ''}</span>
   }, csv: (p) => [p.agent_name, p.agent_phone, p.agent_email].filter(Boolean).join(' · ') },
+  // 35b — Owner of record (from TCAD). Most workable signal for cold outreach.
+  {
+    key: 'owner',
+    header: 'Owner',
+    defaultVisible: true,
+    width: '220px',
+    render: (p) => {
+      if (!p.owner_name) return <span className="text-charcoal/40 text-xs">-</span>
+      const type = classifyOwner(p.owner_name)
+      const badgeClass =
+        type === 'Individual' ? 'bg-emerald-50 text-emerald-800 border-emerald-300' :
+        type === 'Trust'      ? 'bg-capital-gold/15 text-capital-gold border-capital-gold/30' :
+        type === 'Entity'     ? 'bg-stone-100 text-stone-700 border-stone-300' :
+        type === 'Government' ? 'bg-red-50 text-red-700 border-red-200' :
+        'bg-stone-50 text-stone-500 border-stone-200'
+      return (
+        <div className="flex flex-col gap-0.5">
+          <span className="text-xs text-charcoal font-medium truncate" title={p.owner_name}>{p.owner_name}</span>
+          <span className="flex items-center gap-1">
+            <span className={clsx('text-[10px] px-1 py-0.5 rounded border font-semibold', badgeClass)}>{type}</span>
+            {p.is_absentee && <span className="text-[10px] text-capital-gold" title="Absentee owner — mailing address differs from property">✈ abs</span>}
+            {p.has_homestead_exemption && <span className="text-[10px] text-stone-500" title="Homestead exemption — primary residence">🏠</span>}
+            {p.distress_signal && <span className="text-[10px] bg-red-50 text-red-800 border border-red-200 px-1 rounded" title={p.distress_signal}>⚠ {p.distress_signal}</span>}
+          </span>
+        </div>
+      )
+    },
+    csv: (p) => p.owner_name ? `${p.owner_name} (${classifyOwner(p.owner_name)})` : '',
+  },
   // 36 — Deal Score (badge + number)
   { key: 'deal_score', header: 'Score', defaultVisible: true, sortable: true, width: '180px', render: (p) => {
     const s = p.analyses?.[0]?.deal_score_numeric
