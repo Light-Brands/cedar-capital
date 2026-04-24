@@ -1,7 +1,31 @@
 /**
  * BatchData API Client
- * Skip tracing service for finding owner contact information.
+ * Skip tracing — owner name, phone, email, mailing address, bankruptcy/lien/death flags.
  * https://api.batchdata.com/api/v1
+ *
+ * Response shape (as of 2026-04):
+ *   {
+ *     status: { code: 200, text: "OK" },
+ *     results: {
+ *       persons: [
+ *         {
+ *           propertyAddress: { street, city, state, zip, ... },
+ *           name: { first, last, middle, full },
+ *           phoneNumbers: [{ number, type, score, tested }],
+ *           emails: [{ email, tested }],
+ *           mailingAddress: { street, city, state, zip, addressValidity },
+ *           bankruptcy: {} | { filingDate, type, ... },
+ *           involuntaryLien: {} | { amount, filingDate, ... },
+ *           death: { deceased: bool, date?, ... },
+ *           dnc: { tcpa: bool },
+ *           litigator: bool,
+ *           property: {
+ *             id, address, owner: { name, mailingAddress }, ...
+ *           }
+ *         }
+ *       ]
+ *     }
+ *   }
  */
 
 import type { OwnerInfo } from './types'
@@ -17,24 +41,19 @@ function getHeaders(): HeadersInit {
   }
 }
 
-/**
- * Skip trace a single property address to find owner contact info.
- */
-export async function skipTrace(address: string, city: string, state: string, zip: string): Promise<OwnerInfo | null> {
+export async function skipTrace(
+  address: string,
+  city: string,
+  state: string,
+  zip: string,
+): Promise<OwnerInfo | null> {
   try {
     const res = await fetch(`${BATCHDATA_BASE_URL}/property/skip-trace`, {
       method: 'POST',
       headers: getHeaders(),
       body: JSON.stringify({
         requests: [
-          {
-            propertyAddress: {
-              street: address,
-              city,
-              state,
-              zip,
-            },
-          },
+          { propertyAddress: { street: address, city, state, zip } },
         ],
       }),
     })
@@ -45,95 +64,119 @@ export async function skipTrace(address: string, city: string, state: string, zi
     }
 
     const data = await res.json() as Record<string, unknown>
-    const results = (data.results ?? data.data ?? []) as Record<string, unknown>[]
-    if (results.length === 0) return null
-
-    return mapBatchDataResult(results[0])
+    const results = (data.results ?? {}) as Record<string, unknown>
+    const persons = (results.persons ?? []) as Record<string, unknown>[]
+    if (persons.length === 0) return null
+    return mapPerson(persons[0])
   } catch (err) {
-    console.error(`BatchData skip trace error:`, err)
+    console.error('BatchData skip trace error:', err)
     return null
   }
 }
 
-/**
- * Batch skip trace multiple addresses.
- */
 export async function batchSkipTrace(
-  addresses: Array<{ address: string; city: string; state: string; zip: string }>
+  addresses: Array<{ address: string; city: string; state: string; zip: string }>,
 ): Promise<(OwnerInfo | null)[]> {
   try {
-    const requests = addresses.map(a => ({
-      propertyAddress: {
-        street: a.address,
-        city: a.city,
-        state: a.state,
-        zip: a.zip,
-      },
-    }))
-
     const res = await fetch(`${BATCHDATA_BASE_URL}/property/skip-trace`, {
       method: 'POST',
       headers: getHeaders(),
-      body: JSON.stringify({ requests }),
+      body: JSON.stringify({
+        requests: addresses.map(a => ({
+          propertyAddress: { street: a.address, city: a.city, state: a.state, zip: a.zip },
+        })),
+      }),
     })
-
-    if (!res.ok) {
-      const text = await res.text()
-      throw new Error(`BatchData batch API error ${res.status}: ${text}`)
-    }
-
+    if (!res.ok) throw new Error(`BatchData batch API error ${res.status}`)
     const data = await res.json() as Record<string, unknown>
-    const results = (data.results ?? data.data ?? []) as Record<string, unknown>[]
-    return results.map(mapBatchDataResult)
+    const results = (data.results ?? {}) as Record<string, unknown>
+    const persons = (results.persons ?? []) as Record<string, unknown>[]
+    return addresses.map((_, i) => (persons[i] ? mapPerson(persons[i]) : null))
   } catch (err) {
-    console.error(`BatchData batch skip trace error:`, err)
+    console.error('BatchData batch skip trace error:', err)
     return addresses.map(() => null)
   }
 }
 
-// ---------- Helpers ----------
+// ---------- Mapper ----------
 
-function mapBatchDataResult(record: Record<string, unknown>): OwnerInfo | null {
-  const owner = (record.owner ?? record.contact ?? {}) as Record<string, unknown>
-  const property = (record.property ?? {}) as Record<string, unknown>
-  const phones = (owner.phones ?? owner.phoneNumbers ?? []) as Array<Record<string, unknown> | string>
-  const emails = (owner.emails ?? owner.emailAddresses ?? []) as Array<Record<string, unknown> | string>
-  const mailingAddr = (owner.mailingAddress ?? owner.address ?? {}) as Record<string, unknown>
+function mapPerson(person: Record<string, unknown>): OwnerInfo | null {
+  const name = (person.name ?? {}) as Record<string, unknown>
+  const phoneNumbers = (person.phoneNumbers ?? []) as Array<Record<string, unknown>>
+  const emails = (person.emails ?? []) as Array<Record<string, unknown>>
+  const personMail = (person.mailingAddress ?? {}) as Record<string, unknown>
+  const propertyAddr = (person.propertyAddress ?? {}) as Record<string, unknown>
+  const property = (person.property ?? {}) as Record<string, unknown>
+  const propertyOwner = (property.owner ?? {}) as Record<string, unknown>
+  const propertyOwnerMail = (propertyOwner.mailingAddress ?? {}) as Record<string, unknown>
+  const bankruptcy = (person.bankruptcy ?? {}) as Record<string, unknown>
+  const involuntaryLien = (person.involuntaryLien ?? {}) as Record<string, unknown>
+  const death = (person.death ?? {}) as Record<string, unknown>
+  const dnc = (person.dnc ?? {}) as Record<string, unknown>
 
-  const phoneNumbers = phones
-    .map(p => typeof p === 'string' ? p : String(p.number ?? p.phone ?? ''))
+  const fullName = String(name.full ?? [name.first, name.middle, name.last].filter(Boolean).join(' '))
+  if (!fullName && phoneNumbers.length === 0 && emails.length === 0) return null
+
+  const phones = phoneNumbers
+    .map(p => String(p.number ?? p.phone ?? ''))
+    .filter(Boolean)
+  const emailList = emails
+    .map(e => String(e.email ?? e.address ?? ''))
     .filter(Boolean)
 
-  const emailAddresses = emails
-    .map(e => typeof e === 'string' ? e : String(e.address ?? e.email ?? ''))
-    .filter(Boolean)
+  const propertyStreet = String(propertyAddr.street ?? '').toLowerCase()
+  const propertyZip = String(propertyAddr.zip ?? '').slice(0, 5)
+  const mailStreet = String(propertyOwnerMail.street ?? personMail.street ?? '').toLowerCase()
+  const mailZip = String(propertyOwnerMail.zip ?? personMail.zip ?? '').slice(0, 5)
+  const isAbsentee = Boolean(
+    (mailStreet && propertyStreet && mailStreet !== propertyStreet) ||
+    (mailZip && propertyZip && mailZip !== propertyZip),
+  )
 
-  if (!phoneNumbers.length && !emailAddresses.length && !owner.name) {
-    return null
-  }
-
-  const ownerAddress = typeof mailingAddr === 'string'
-    ? mailingAddr
-    : [mailingAddr.street, mailingAddr.city, mailingAddr.state, mailingAddr.zip]
-        .filter(Boolean).join(', ')
-
-  const propertyAddress = String(property.address ?? '')
+  const mailAddrParts = [
+    propertyOwnerMail.street ?? personMail.street,
+    propertyOwnerMail.city ?? personMail.city,
+    propertyOwnerMail.state ?? personMail.state,
+    propertyOwnerMail.zip ?? personMail.zip,
+  ].filter(Boolean)
 
   return {
-    ownerName: String(owner.name ?? owner.fullName ?? ''),
-    ownerType: String(owner.type ?? owner.ownerType ?? 'Individual'),
-    mailingAddress: ownerAddress || undefined,
-    phoneNumbers,
-    emailAddresses,
-    isAbsentee: ownerAddress && propertyAddress
-      ? !ownerAddress.toLowerCase().includes(propertyAddress.toLowerCase().split(',')[0])
-      : undefined,
-    isOwnerOccupied: owner.ownerOccupied != null
-      ? Boolean(owner.ownerOccupied)
-      : undefined,
-    ownershipLengthYears: Number(owner.ownershipLength ?? owner.yearsOwned ?? 0) || undefined,
-    estimatedEquity: Number(property.estimatedEquity ?? property.equity ?? 0) || undefined,
-    mortgageBalance: Number(property.mortgageBalance ?? property.mortgage ?? 0) || undefined,
-    rawData: record,
+    ownerName: fullName || undefined,
+    ownerType: 'Individual',
+    mailingAddress: mailAddrParts.length > 0 ? mailAddrParts.join(', ') : undefined,
+    phoneNumbers: phones,
+    emailAddresses: emailList,
+    isAbsentee,
+    isOwnerOccupied: !isAbsentee,
+    ownershipLengthYears: undefined,
+    estimatedEquity: undefined,
+    mortgageBalance: undefined,
+    rawData: {
+      ...person,
+      _derived_distress: deriveDistress({ bankruptcy, involuntaryLien, death, dnc }),
+    },
   }
+}
+
+/**
+ * Pull a single distress string out of BatchData's flag objects.
+ * The enrich route already has its own regex-based detector over rawData;
+ * this helper just gives the mapper a clean pre-extracted value for easy use.
+ */
+function deriveDistress(flags: {
+  bankruptcy: Record<string, unknown>
+  involuntaryLien: Record<string, unknown>
+  death: Record<string, unknown>
+  dnc: Record<string, unknown>
+}): string | null {
+  if (flags.bankruptcy && Object.keys(flags.bankruptcy).length > 0 && flags.bankruptcy.filingDate) {
+    return 'Bankruptcy'
+  }
+  if (flags.involuntaryLien && Object.keys(flags.involuntaryLien).length > 0 && flags.involuntaryLien.amount) {
+    return 'Involuntary lien'
+  }
+  if (flags.death?.deceased === true) {
+    return 'Owner deceased'
+  }
+  return null
 }
