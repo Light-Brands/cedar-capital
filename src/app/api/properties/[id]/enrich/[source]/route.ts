@@ -19,7 +19,7 @@ import { createServerClient } from '@/lib/supabase/client'
 import type { Property } from '@/lib/supabase/types'
 import * as batchdata from '@/lib/api/batchdata'
 import * as rentcast from '@/lib/api/rentcast'
-import { filterComps, analyzeComps, type CompSale } from '@/lib/analysis/comps'
+import { progressiveFilterComps, analyzeComps, type CompSale } from '@/lib/analysis/comps'
 import { analyzeDeal, toAnalysisInsert } from '@/lib/analysis/deal-analyzer'
 
 export const runtime = 'nodejs'
@@ -216,17 +216,7 @@ async function enrichRentcastAvm(
     })
   }
 
-  const RADIUS_TIERS = [0.5, 1.0, 2.0, 5.0]
-  let chosenComps = allComps.filter(c => c.distanceMiles <= RADIUS_TIERS[0])
-  let effectiveRadius = RADIUS_TIERS[0]
-  for (const r of RADIUS_TIERS) {
-    const inRadius = allComps.filter(c => c.distanceMiles <= r)
-    chosenComps = inRadius
-    effectiveRadius = r
-    if (inRadius.length >= 3) break
-  }
-
-  const compSales: CompSale[] = chosenComps.map(c => ({
+  const compSales: CompSale[] = allComps.map(c => ({
     address: c.address,
     salePrice: c.salePrice,
     sqft: c.sqft,
@@ -236,9 +226,11 @@ async function enrichRentcastAvm(
     distanceMiles: c.distanceMiles,
   }))
 
-  // filterComps applies its own distance + sqft + age filters, so let it
-  // use the effective radius we landed on above.
-  const filtered = filterComps(compSales, property.sqft ?? 1500, effectiveRadius)
+  // Progressive filter — try strict first, loosen until we have ≥3 comps.
+  const { filtered, tier, radius: effectiveRadius } = progressiveFilterComps(
+    compSales,
+    property.sqft ?? 1500,
+  )
   const compAnalysis = analyzeComps(filtered, property.sqft ?? 1500)
 
   const reanalysis = await reanalyzeOne(supabase, property, compAnalysis)
@@ -253,6 +245,7 @@ async function enrichRentcastAvm(
     source: 'rentcast_avm',
     compCount: compAnalysis.compCount,
     effectiveRadius,
+    tier,
     rawCompsReturned: allComps.length,
     estimatedARV: compAnalysis.estimatedARV,
     avgPricePerSqft: compAnalysis.avgPricePerSqft,
