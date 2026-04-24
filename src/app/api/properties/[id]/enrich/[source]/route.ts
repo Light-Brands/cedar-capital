@@ -80,8 +80,11 @@ async function enrichBatchData(
     })
   }
 
+  // Our stored address is the full "street, city, state zip" string but
+  // BatchData expects just the street portion — otherwise the match fails.
+  const streetOnly = property.address.split(',')[0].trim()
   const owner = await batchdata.skipTrace(
-    property.address,
+    streetOnly,
     property.city,
     property.state,
     property.zip_code ?? '',
@@ -186,8 +189,11 @@ async function enrichRentcastAvm(
     })
   }
 
+  // Same caveat as batchdata — address is pre-formatted; most external APIs
+  // expect just the street portion.
+  const streetOnly = property.address.split(',')[0].trim()
   const rawComps = await rentcast.getSalesComps(
-    property.address,
+    streetOnly,
     property.city,
     property.state,
     property.zip_code ?? '',
