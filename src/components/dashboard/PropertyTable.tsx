@@ -100,6 +100,8 @@ export interface EnrichmentResult {
   distress?: string | null
   compCount?: number
   effectiveRadius?: number
+  tier?: string
+  trustComps?: boolean
   rawCompsReturned?: number
   estimatedARV?: number
   avgPricePerSqft?: number
@@ -526,8 +528,12 @@ function EnrichButtons({
           const phones = data.owner?.phones?.length ?? 0
           setLastMessage(`${phones} phone${phones === 1 ? '' : 's'}${data.distress ? ` · ${data.distress}` : ''}`)
         } else {
+          // Show the tier label so Kelly can tell tight matches apart from
+          // loose fallbacks. "⚠ loose" appears when we didn't trust the
+          // comps (too few or too dissimilar — ARV came from TCAD instead).
           const radius = data.effectiveRadius ? ` @ ${data.effectiveRadius}mi` : ''
-          setLastMessage(`${data.compCount ?? 0} comps${radius}${data.verified ? ' ✓' : ''}`)
+          const quality = data.trustComps === false ? ' ⚠ loose' : data.verified ? ' ✓' : ''
+          setLastMessage(`${data.compCount ?? 0} comps${radius}${quality}`)
         }
       } else {
         setState('failed')

@@ -233,7 +233,18 @@ async function enrichRentcastAvm(
   )
   const compAnalysis = analyzeComps(filtered, property.sqft ?? 1500)
 
-  const reanalysis = await reanalyzeOne(supabase, property, compAnalysis)
+  // If we only landed comps at the loosest "best available" tier with < 3
+  // matches, they're probably dissimilar (e.g. a small house in a subdivision
+  // of larger homes). Don't let them drive ARV — let the analyzer fall back
+  // to TCAD market_value which is usually more grounded in that scenario.
+  const bestAvailableTier = 'best available (5mi, any size)'
+  const trustComps = tier !== bestAvailableTier && compAnalysis.compCount >= 3
+
+  const reanalysis = await reanalyzeOne(
+    supabase,
+    property,
+    trustComps ? compAnalysis : undefined,
+  )
 
   await supabase
     .from('properties')
@@ -246,6 +257,7 @@ async function enrichRentcastAvm(
     compCount: compAnalysis.compCount,
     effectiveRadius,
     tier,
+    trustComps,
     rawCompsReturned: allComps.length,
     estimatedARV: compAnalysis.estimatedARV,
     avgPricePerSqft: compAnalysis.avgPricePerSqft,
