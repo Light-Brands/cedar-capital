@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabase/client'
+import { normalizeRelations } from '@/lib/supabase/normalize'
 import StatsBar from '@/components/dashboard/StatsBar'
 import DealCard from '@/components/dashboard/DealCard'
 import RefreshButton from '@/components/dashboard/RefreshButton'
@@ -51,7 +52,11 @@ export default function DashboardPage() {
       .order('created_at', { ascending: false })
       .limit(50)
 
-    const props = (data ?? []) as unknown as DashboardProperty[]
+    // Supabase returns analyses + pipeline as to-one objects now; normalize.
+    const props = normalizeRelations(
+      (data ?? []) as unknown as Record<string, unknown>[],
+      ['analyses', 'pipeline'],
+    ) as unknown as DashboardProperty[]
     setProperties(props)
 
     // Calculate stats

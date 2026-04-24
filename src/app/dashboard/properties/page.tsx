@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { supabase } from '@/lib/supabase/client'
+import { normalizeRelations } from '@/lib/supabase/normalize'
 import PropertyTable, { type FullPropertyRow } from '@/components/dashboard/PropertyTable'
 import RefreshButton from '@/components/dashboard/RefreshButton'
 
@@ -63,7 +64,13 @@ export default function PropertiesPage() {
       return
     }
 
-    let loaded = (data ?? []) as unknown as FullPropertyRow[]
+    // Post-UNIQUE-constraint, Supabase returns `analyses` as object-or-null
+    // instead of array. Normalize to array shape so UI code (p.analyses?.[0])
+    // keeps working uniformly for analyzed + unanalyzed rows.
+    let loaded = normalizeRelations(
+      (data ?? []) as unknown as Record<string, unknown>[],
+      ['analyses'],
+    ) as unknown as FullPropertyRow[]
 
     // Client-side filter by badge (requires analysis)
     if (filters.badge) {

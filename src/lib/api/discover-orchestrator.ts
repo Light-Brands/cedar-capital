@@ -8,15 +8,19 @@
  */
 
 import { createServerClient } from '@/lib/supabase/client'
-import type { PropertyInsert } from '@/lib/supabase/types'
+import type { Property, PropertyInsert } from '@/lib/supabase/types'
 import type { DiscoveredProperty } from './types'
 import { getAdapter } from './registry'
+import { loadZipStats, type ZipStatsMap } from '@/lib/analysis/zip-stats'
+import { analyzeDeal, toAnalysisInsert } from '@/lib/analysis/deal-analyzer'
 
 export interface PerSourceResult {
   slug: string
   status: 'success' | 'failed' | 'skipped'
   discovered: number
   saved: number
+  /** Count of analyses produced inline during this source's run */
+  autoAnalyzed: number
   durationMs: number
   error?: string
 }
@@ -24,6 +28,7 @@ export interface PerSourceResult {
 export interface DiscoverSummary {
   totalDiscovered: number
   totalSaved: number
+  totalAutoAnalyzed: number
   sources: PerSourceResult[]
 }
 
@@ -58,22 +63,35 @@ export async function runDiscover(options: RunDiscoverOptions = {}): Promise<Dis
   const zipCodes = (zipRes.data ?? []).map(z => z.zip_code)
 
   if (sources.length === 0) {
-    return { totalDiscovered: 0, totalSaved: 0, sources: [] }
+    return { totalDiscovered: 0, totalSaved: 0, totalAutoAnalyzed: 0, sources: [] }
   }
   if (zipCodes.length === 0) {
-    return { totalDiscovered: 0, totalSaved: 0, sources: [] }
+    return { totalDiscovered: 0, totalSaved: 0, totalAutoAnalyzed: 0, sources: [] }
   }
+
+  // Load zip stats once for the whole run — every property upserted below
+  // tries to compute its analysis inline so the UI sees numbers right away.
+  const zipStats = await loadZipStats(supabase, 3)
 
   const results: PerSourceResult[] = []
 
   // Sources run sequentially to keep rate-limit exposure predictable and memory bounded
   for (const source of sources) {
-    results.push(await runSource(source.slug, source.total_synced_count ?? 0, source.total_errors_count ?? 0, zipCodes))
+    results.push(
+      await runSource(
+        source.slug,
+        source.total_synced_count ?? 0,
+        source.total_errors_count ?? 0,
+        zipCodes,
+        zipStats,
+      ),
+    )
   }
 
   return {
     totalDiscovered: results.reduce((s, r) => s + r.discovered, 0),
     totalSaved: results.reduce((s, r) => s + r.saved, 0),
+    totalAutoAnalyzed: results.reduce((s, r) => s + r.autoAnalyzed, 0),
     sources: results,
   }
 }
@@ -83,6 +101,7 @@ async function runSource(
   priorSynced: number,
   priorErrors: number,
   zipCodes: string[],
+  zipStats: ZipStatsMap,
 ): Promise<PerSourceResult> {
   const supabase = createServerClient()
   const adapter = getAdapter(slug)
@@ -93,6 +112,7 @@ async function runSource(
       status: 'skipped',
       discovered: 0,
       saved: 0,
+      autoAnalyzed: 0,
       durationMs: 0,
       error: `No listings adapter registered for slug "${slug}"`,
     }
@@ -115,18 +135,33 @@ async function runSource(
     const message = err instanceof Error ? err.message : String(err)
     const durationMs = Date.now() - start
     await finalizeFailure(supabase, syncId, slug, priorErrors, message, durationMs)
-    return { slug, status: 'failed', discovered: 0, saved: 0, durationMs, error: message }
+    return { slug, status: 'failed', discovered: 0, saved: 0, autoAnalyzed: 0, durationMs, error: message }
   }
 
   let saved = 0
+  let autoAnalyzed = 0
   for (const prop of discovered) {
     try {
       const insert = toPropertyInsert(prop)
-      const { error } = await supabase
+      // Upsert AND return the full row so we can analyze it inline
+      const { data: upserted, error } = await supabase
         .from('properties')
         .upsert(insert, { onConflict: 'address,zip_code', ignoreDuplicates: false })
-      if (!error) saved++
-      else console.error(`[discover/${slug}] upsert failed for ${prop.address}:`, error.message)
+        .select('*')
+        .maybeSingle()
+
+      if (error || !upserted) {
+        if (error) console.error(`[discover/${slug}] upsert failed for ${prop.address}:`, error.message)
+        continue
+      }
+      saved++
+
+      // Inline auto-enrich: zip-stats ARV, badge, discount%, MAO, etc.
+      // Skips cleanly if missing sqft/price/zip — the analyze cron acts as a
+      // backstop for anything we couldn't enrich here.
+      if (await autoAnalyze(supabase, upserted as Property, zipStats)) {
+        autoAnalyzed++
+      }
     } catch (err) {
       console.error(`[discover/${slug}] map error for ${prop.address}:`, err)
     }
@@ -142,7 +177,7 @@ async function runSource(
         count: saved,
         duration_ms: durationMs,
         finished_at: new Date().toISOString(),
-        metadata: { discovered: discovered.length, saved },
+        metadata: { discovered: discovered.length, saved, autoAnalyzed },
       })
       .eq('id', syncId)
   }
@@ -159,7 +194,45 @@ async function runSource(
     })
     .eq('slug', slug)
 
-  return { slug, status: 'success', discovered: discovered.length, saved, durationMs }
+  return { slug, status: 'success', discovered: discovered.length, saved, autoAnalyzed, durationMs }
+}
+
+/**
+ * Inline enrichment after a property is upserted. Uses zip-level $/sqft from
+ * our own listings as the ARV anchor (verified=false). Returns true if an
+ * analysis row was written, false if skipped.
+ */
+async function autoAnalyze(
+  supabase: ReturnType<typeof createServerClient>,
+  property: Property,
+  zipStats: ZipStatsMap,
+): Promise<boolean> {
+  if (!property.asking_price || property.asking_price <= 0) return false
+  if (!property.sqft || property.sqft <= 0) return false
+  if (!property.zip_code) return false
+
+  const stat = zipStats.get(property.zip_code)
+  if (!stat?.avgPerSqft) return false
+
+  try {
+    const result = analyzeDeal({
+      property,
+      zipAvgPerSqft: stat.avgPerSqft,
+      distressSignal: property.list_type ?? undefined,
+    })
+    const insert = toAnalysisInsert(property.id, result)
+    const { error } = await supabase
+      .from('analyses')
+      .upsert(insert, { onConflict: 'property_id' })
+    if (error) {
+      console.error(`[auto-analyze] upsert failed for ${property.address}:`, error.message)
+      return false
+    }
+    return true
+  } catch (err) {
+    console.error(`[auto-analyze] error for ${property.address}:`, err)
+    return false
+  }
 }
 
 async function finalizeFailure(
