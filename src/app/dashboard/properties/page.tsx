@@ -69,9 +69,10 @@ export default function PropertiesPage() {
     let query = supabase
       .from('properties')
       .select(`
-        id, address, city, zip_code, beds, baths, sqft, lot_size, asking_price, list_type,
-        property_type, market_value, source, link, days_on_market, created_at,
-        listing_status, review_status, agent_name, agent_phone, agent_email,
+        id, tcad_prop_id, address, city, zip_code, beds, baths, sqft, lot_size,
+        asking_price, list_type, property_type, market_value, source, link,
+        days_on_market, created_at, listing_status, review_status,
+        agent_name, agent_phone, agent_email,
         owner_name, owner_mailing_address, is_absentee, has_homestead_exemption,
         distress_signal, special_features, notes,
         ${analysesSelect}

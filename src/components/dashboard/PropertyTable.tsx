@@ -7,6 +7,7 @@ import ScoreBadge from './ScoreBadge'
 import { scoreToBadge } from '@/lib/analysis/badge'
 import { classifyUnitType, isParcelMismatchLikely, isMultiUnit } from '@/lib/analysis/property-classifier'
 import { classifyOwner } from '@/lib/analysis/owner-classifier'
+import { toZillowUrl, toRealtorUrl, toGoogleMapsUrl, toTcadUrl } from '@/lib/external-links'
 import { toCsv, downloadCsv, type CsvColumn } from '@/lib/csv'
 
 /**
@@ -17,6 +18,7 @@ import { toCsv, downloadCsv, type CsvColumn } from '@/lib/csv'
 
 export interface FullPropertyRow {
   id: string
+  tcad_prop_id: string | null
   // properties
   address: string
   city: string
@@ -249,13 +251,41 @@ const COLUMNS: ColumnDef[] = [
   },
   // 4 — Date
   { key: 'date', header: 'Date', defaultVisible: true, sortable: true, render: (p) => <span className="text-charcoal/60 text-xs">{fmtDate(p.created_at)}</span>, csv: (p) => fmtDate(p.created_at) },
-  // 5 — Link
+  // 5 — Link — original listing URL + cross-reference jumps (Zillow / Realtor / Maps / TCAD)
   {
     key: 'link',
-    header: 'Link',
+    header: 'Links',
     defaultVisible: true,
-    render: (p) => p.link ? <a href={p.link} target="_blank" rel="noreferrer" className="text-cedar-green hover:underline text-xs">↗</a> : <span className="text-charcoal/40">-</span>,
-    csv: (p) => p.link ?? '',
+    width: '160px',
+    render: (p) => {
+      const zillow = toZillowUrl(p.address)
+      const realtor = toRealtorUrl(p.address)
+      const maps = toGoogleMapsUrl(p.address)
+      const tcad = toTcadUrl(p.tcad_prop_id)
+      const linkClass = 'px-1.5 py-0.5 text-[10px] font-semibold rounded border bg-white text-cedar-green border-cedar-green/30 hover:bg-cedar-green/10 transition-colors'
+      return (
+        <div className="flex flex-wrap items-center gap-1" onClick={e => e.stopPropagation()}>
+          {p.link && (
+            <a href={p.link} target="_blank" rel="noreferrer" className={linkClass} title="Original listing URL">
+              Source ↗
+            </a>
+          )}
+          {zillow && (
+            <a href={zillow} target="_blank" rel="noreferrer" className={linkClass} title="Find this address on Zillow">Z</a>
+          )}
+          {realtor && (
+            <a href={realtor} target="_blank" rel="noreferrer" className={linkClass} title="Find this address on Realtor.com">R</a>
+          )}
+          {maps && (
+            <a href={maps} target="_blank" rel="noreferrer" className={linkClass} title="Open in Google Maps (satellite + street view)">🗺</a>
+          )}
+          {tcad && (
+            <a href={tcad} target="_blank" rel="noreferrer" className={linkClass} title="Travis Central Appraisal District — full parcel record">TCAD</a>
+          )}
+        </div>
+      )
+    },
+    csv: (p) => [p.link, toZillowUrl(p.address), toRealtorUrl(p.address)].filter(Boolean).join(' | '),
   },
   // 6 — List Type
   {
