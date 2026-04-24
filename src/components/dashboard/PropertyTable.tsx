@@ -181,13 +181,13 @@ const COLUMNS: ColumnDef[] = [
       })
       const mismatch = isParcelMismatchLikely(unitType, p.market_value, p.asking_price)
       return (
-        <div className="flex items-center gap-1.5 whitespace-nowrap">
+        <div className="flex items-center gap-1.5 overflow-hidden">
           {isNew24h(p.created_at) && (
             <span className="flex-shrink-0 text-[9px] bg-cedar-green text-cream px-1 py-0.5 rounded font-semibold">NEW</span>
           )}
           <Link
             href={`/dashboard/properties/${p.id}`}
-            className="font-medium text-cedar-green hover:underline truncate"
+            className="font-medium text-cedar-green hover:underline truncate min-w-0 flex-1"
             title={p.address}
           >
             {p.address}
@@ -458,8 +458,8 @@ const COLUMNS: ColumnDef[] = [
         type === 'Government' ? 'bg-red-50 text-red-700 border-red-200' :
         'bg-stone-50 text-stone-500 border-stone-200'
       return (
-        <div className="flex items-center gap-1.5 whitespace-nowrap" title={p.owner_name}>
-          <span className="text-xs text-charcoal font-medium truncate">{p.owner_name}</span>
+        <div className="flex items-center gap-1.5 overflow-hidden" title={p.owner_name}>
+          <span className="text-xs text-charcoal font-medium truncate min-w-0 flex-1">{p.owner_name}</span>
           <span className={clsx('flex-shrink-0 text-[10px] px-1 py-0.5 rounded border font-semibold', badgeClass)}>{type}</span>
           {p.is_absentee && <span className="flex-shrink-0 text-[10px] text-capital-gold" title="Absentee owner — mailing address differs from property">✈</span>}
           {p.has_homestead_exemption && <span className="flex-shrink-0 text-[10px] text-stone-500" title="Homestead exemption — primary residence">🏠</span>}
