@@ -9,6 +9,7 @@ import { classifyUnitType, isParcelMismatchLikely, isMultiUnit } from '@/lib/ana
 import { classifyOwner } from '@/lib/analysis/owner-classifier'
 import { toZillowUrl, toRealtorUrl, toGoogleMapsUrl, toTcadUrl } from '@/lib/external-links'
 import { toCsv, downloadCsv, type CsvColumn } from '@/lib/csv'
+import { useLocalStorage } from '@/lib/use-local-storage'
 
 /**
  * Kelly's 36-column deal row.
@@ -613,19 +614,23 @@ function ReviewChip({ status, onCycle }: { status: string | null; onCycle: () =>
 // ============================================================
 
 export default function PropertyTable({ rows, sortColumn, sortOrder, onSort, onReviewStatusChange, onEnriched }: Props) {
-  const [visible, setVisible] = useState<Set<string>>(
-    () => new Set(COLUMNS.filter(c => c.defaultVisible).map(c => c.key))
+  // Column visibility persists per-browser via localStorage
+  const defaultKeys = useMemo(
+    () => COLUMNS.filter(c => c.defaultVisible).map(c => c.key),
+    [],
   )
+  const [visibleKeys, setVisibleKeys] = useLocalStorage<string[]>('cedar.properties.columns', defaultKeys)
+  const visible = useMemo(() => new Set(visibleKeys), [visibleKeys])
   const [showColumnPicker, setShowColumnPicker] = useState(false)
 
   const visibleColumns = useMemo(() => COLUMNS.filter(c => visible.has(c.key)), [visible])
 
   function toggleCol(key: string) {
-    setVisible(prev => {
-      const next = new Set(prev)
-      if (next.has(key)) next.delete(key)
-      else next.add(key)
-      return next
+    setVisibleKeys(prev => {
+      const set = new Set(prev)
+      if (set.has(key)) set.delete(key)
+      else set.add(key)
+      return Array.from(set)
     })
   }
 
@@ -673,8 +678,8 @@ export default function PropertyTable({ rows, sortColumn, sortOrder, onSort, onR
           <div className="flex items-center justify-between mb-2">
             <span className="text-xs font-semibold text-charcoal/70 uppercase tracking-wide">Column Visibility</span>
             <div className="flex gap-2">
-              <button type="button" onClick={() => setVisible(new Set(COLUMNS.map(c => c.key)))} className="text-xs text-cedar-green hover:underline">Show all</button>
-              <button type="button" onClick={() => setVisible(new Set(COLUMNS.filter(c => c.defaultVisible).map(c => c.key)))} className="text-xs text-charcoal/60 hover:text-charcoal">Reset</button>
+              <button type="button" onClick={() => setVisibleKeys(COLUMNS.map(c => c.key))} className="text-xs text-cedar-green hover:underline">Show all</button>
+              <button type="button" onClick={() => setVisibleKeys(defaultKeys)} className="text-xs text-charcoal/60 hover:text-charcoal">Reset</button>
             </div>
           </div>
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-1 text-xs">

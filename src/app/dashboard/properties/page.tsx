@@ -1,10 +1,12 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { clsx } from 'clsx'
 import { supabase } from '@/lib/supabase/client'
 import { normalizeRelations } from '@/lib/supabase/normalize'
 import { classifyUnitType, isParcelMismatchLikely } from '@/lib/analysis/property-classifier'
 import { classifyOwner, type OwnerType } from '@/lib/analysis/owner-classifier'
+import { useLocalStorage } from '@/lib/use-local-storage'
 import PropertyTable, {
   type FullPropertyRow,
   type EnrichmentResult,
@@ -16,26 +18,102 @@ type ReviewFilter = '' | 'New' | 'Reviewed' | 'Contacted' | 'Dead'
 type UnitFilter = '' | 'SFR' | 'Condo' | 'Townhouse' | 'Duplex' | 'Multi' | 'Land'
 type OwnerFilter = '' | OwnerType
 
+interface Filters {
+  badge: BadgeFilter
+  review: ReviewFilter
+  zip: string
+  listType: string
+  source: string
+  fsboOnly: boolean
+  unitType: UnitFilter
+  hideMismatch: boolean
+  ownerType: OwnerFilter
+  absenteeOnly: boolean
+  hasDistress: boolean
+}
+
+const EMPTY_FILTERS: Filters = {
+  badge: '', review: '', zip: '', listType: '', source: '',
+  fsboOnly: false, unitType: '', hideMismatch: false,
+  ownerType: '', absenteeOnly: false, hasDistress: false,
+}
+
+/**
+ * Preset filter combos — the one-click "Hot Deals" is the default Kelly
+ * should reach for. Others give quick cuts for different campaigns.
+ */
+const PRESETS: Array<{ key: string; label: string; icon: string; desc: string; filters: Partial<Filters> }> = [
+  {
+    key: 'hot',
+    label: 'Hot Deals',
+    icon: '🔥',
+    desc: 'Could Work+, individual owner, absentee, SFR, clean match',
+    filters: { badge: 'Could Work', ownerType: 'Individual', absenteeOnly: true, unitType: 'SFR', hideMismatch: true },
+  },
+  {
+    key: 'perfect',
+    label: 'Perfect Fit',
+    icon: '⭐',
+    desc: 'Only the highest-scoring deals in the feed',
+    filters: { badge: 'Perfect Fit' },
+  },
+  {
+    key: 'strong',
+    label: 'Strong Match',
+    icon: '💎',
+    desc: 'Score 75-89 — worth a call this week',
+    filters: { badge: 'Strong Match' },
+  },
+  {
+    key: 'distress',
+    label: 'Distressed',
+    icon: '⚠',
+    desc: 'Pre-foreclosure, tax-delinquent, probate, vacant, REO',
+    filters: { hasDistress: true },
+  },
+  {
+    key: 'fsbo_indiv',
+    label: 'Real FSBO',
+    icon: '🏠',
+    desc: 'Individual owner selling direct (not builder LLCs)',
+    filters: { fsboOnly: true, ownerType: 'Individual' },
+  },
+  {
+    key: 'investor',
+    label: 'Absentee LLCs',
+    icon: '🏢',
+    desc: 'Corporate owners not occupying — sometimes sell off-market',
+    filters: { ownerType: 'Entity', absenteeOnly: true },
+  },
+  {
+    key: 'trust',
+    label: 'Trust Owners',
+    icon: '📜',
+    desc: 'Estate/inheritance signal, often motivated',
+    filters: { ownerType: 'Trust' },
+  },
+]
+
 export default function PropertiesPage() {
   const [rows, setRows] = useState<FullPropertyRow[]>([])
   const [loading, setLoading] = useState(true)
-  const [filters, setFilters] = useState({
-    badge: '' as BadgeFilter,
-    review: '' as ReviewFilter,
-    zip: '',
-    listType: '',
-    source: '',
-    fsboOnly: false,
-    unitType: '' as UnitFilter,
-    hideMismatch: false,
-    ownerType: '' as OwnerFilter,
-    absenteeOnly: false,
-    hasDistress: false,
-  })
+  const [filters, setFilters] = useLocalStorage<Filters>('cedar.properties.filters', EMPTY_FILTERS)
   const [zipInput, setZipInput] = useState('')
-  const [sortColumn, setSortColumn] = useState<string>('date')
-  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc')
+  const [sortColumn, setSortColumn] = useLocalStorage<string>('cedar.properties.sortColumn', 'date')
+  const [sortOrder, setSortOrder] = useLocalStorage<'asc' | 'desc'>('cedar.properties.sortOrder', 'desc')
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // Sync zip input with persisted filter on mount
+  useEffect(() => { setZipInput(filters.zip) }, [filters.zip])
+
+  function applyPreset(key: string) {
+    const preset = PRESETS.find(p => p.key === key)
+    if (!preset) return
+    // Presets are an OVERLAY on empty filters — so clicking a preset always
+    // resets other filters first, avoiding confusing "stuck" filters.
+    setFilters({ ...EMPTY_FILTERS, ...preset.filters })
+    setZipInput('')
+  }
 
   const handleZipChange = useCallback((value: string) => {
     setZipInput(value)
@@ -272,6 +350,35 @@ export default function PropertiesPage() {
         <RefreshButton />
       </div>
 
+      {/* Preset filter row — one-click wholesaler shortcuts */}
+      <div className="bg-white border border-cedar-green/15 rounded-card p-3 flex flex-wrap gap-2 items-center">
+        <span className="text-xs font-semibold text-cedar-green uppercase tracking-wide mr-1">Presets</span>
+        {PRESETS.map(p => {
+          const isActive = Object.entries(p.filters).every(
+            ([k, v]) => (filters as unknown as Record<string, unknown>)[k] === v,
+          )
+          const isPrimary = p.key === 'hot'
+          return (
+            <button
+              key={p.key}
+              type="button"
+              onClick={() => applyPreset(p.key)}
+              title={p.desc}
+              className={clsx(
+                'text-xs font-semibold px-3 py-1.5 rounded border transition-colors',
+                isActive
+                  ? 'bg-cedar-green text-cream border-cedar-green'
+                  : isPrimary
+                    ? 'bg-capital-gold/10 text-capital-gold border-capital-gold/40 hover:bg-capital-gold/20'
+                    : 'bg-white text-charcoal border-stone/40 hover:bg-sand/40',
+              )}
+            >
+              {p.icon} {p.label}
+            </button>
+          )
+        })}
+      </div>
+
       {/* Filters */}
       <div className="flex flex-wrap gap-3 items-center">
         <select
@@ -412,7 +519,7 @@ export default function PropertiesPage() {
         {activeFilters > 0 && (
           <button
             onClick={() => {
-              setFilters({ badge: '', review: '', zip: '', listType: '', source: '', fsboOnly: false, unitType: '', hideMismatch: false, ownerType: '', absenteeOnly: false, hasDistress: false })
+              setFilters(EMPTY_FILTERS)
               setZipInput('')
             }}
             className="text-sm text-charcoal/60 hover:text-charcoal"
