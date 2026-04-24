@@ -57,3 +57,30 @@ export type LeadSourceAdapter = ListingsAdapter | EnrichmentAdapter | SkipTraceA
 export function missingEnvKeys(keys: string[]): string[] {
   return keys.filter(k => !process.env[k] || process.env[k] === '')
 }
+
+/**
+ * Run an async mapper over items with bounded concurrency.
+ * Drop-in replacement for `for (const item of items) { await fn(item) }` when
+ * the items don't depend on each other — used by adapters to parallelize
+ * per-zip fetches within Vercel's 300s function budget.
+ */
+export async function parallelMap<T, R>(
+  items: T[],
+  concurrency: number,
+  fn: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results: R[] = new Array(items.length)
+  let cursor = 0
+
+  async function worker() {
+    while (true) {
+      const i = cursor++
+      if (i >= items.length) return
+      results[i] = await fn(items[i])
+    }
+  }
+
+  const workers = Array.from({ length: Math.min(concurrency, items.length) }, worker)
+  await Promise.all(workers)
+  return results
+}

@@ -9,12 +9,13 @@
 
 import type { DiscoveredProperty, DiscoveryQuery } from './types'
 import type { ListingsAdapter, ConnectionTestResult, SourceKind } from './source-adapter'
-import { missingEnvKeys } from './source-adapter'
+import { missingEnvKeys, parallelMap } from './source-adapter'
 
 const API_HOST = 'realty-in-us.p.rapidapi.com'
 const API_URL = `https://${API_HOST}/properties/v3/list`
 const PAGE_SIZE = 100
 const MAX_PER_ZIP = 300
+const ZIP_CONCURRENCY = 6 // RapidAPI quota-friendly concurrency
 
 function getHeaders(): HeadersInit {
   const apiKey = process.env.RAPIDAPI_KEY
@@ -82,38 +83,39 @@ export async function testConnection(): Promise<ConnectionTestResult> {
 }
 
 export async function discover(query: DiscoveryQuery): Promise<DiscoveredProperty[]> {
+  const perZip = await parallelMap(query.zipCodes, ZIP_CONCURRENCY, (zip) => fetchZip(zip))
+  return perZip.flat()
+}
+
+async function fetchZip(zip: string): Promise<DiscoveredProperty[]> {
   const properties: DiscoveredProperty[] = []
+  let offset = 0
+  let fetched = 0
 
-  for (const zip of query.zipCodes) {
-    let offset = 0
-    let fetched = 0
-
-    while (fetched < MAX_PER_ZIP) {
-      let page: unknown[]
-      try {
-        page = await search({
-          limit: PAGE_SIZE,
-          offset,
-          postal_code: zip,
-          status: ['for_sale'],
-          sort: { direction: 'desc', field: 'list_date' },
-        })
-      } catch (err) {
-        console.error(`realty-in-us discover error for ${zip}:`, err)
-        break
-      }
-
-      if (page.length === 0) break
-
-      for (const record of page) {
-        const prop = mapListing(record as Record<string, unknown>)
-        if (prop) properties.push(prop)
-      }
-
-      fetched += page.length
-      offset += page.length
-      if (page.length < PAGE_SIZE) break
+  while (fetched < MAX_PER_ZIP) {
+    let page: unknown[]
+    try {
+      page = await search({
+        limit: PAGE_SIZE,
+        offset,
+        postal_code: zip,
+        status: ['for_sale'],
+        sort: { direction: 'desc', field: 'list_date' },
+      })
+    } catch (err) {
+      console.error(`realty-in-us discover error for ${zip}:`, err)
+      break
     }
+    if (page.length === 0) break
+
+    for (const record of page) {
+      const prop = mapListing(record as Record<string, unknown>)
+      if (prop) properties.push(prop)
+    }
+
+    fetched += page.length
+    offset += page.length
+    if (page.length < PAGE_SIZE) break
   }
 
   return properties

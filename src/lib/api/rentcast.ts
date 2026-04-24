@@ -9,11 +9,12 @@
 
 import type { DiscoveredProperty, DiscoveryQuery, SalesComp } from './types'
 import type { ListingsAdapter, ConnectionTestResult, SourceKind } from './source-adapter'
-import { missingEnvKeys } from './source-adapter'
+import { missingEnvKeys, parallelMap } from './source-adapter'
 
 const RENTCAST_BASE_URL = 'https://api.rentcast.io/v1'
 const RENTCAST_PAGE_SIZE = 100
 const RENTCAST_MAX_PER_ZIP = 200
+const RENTCAST_ZIP_CONCURRENCY = 8 // 20 req/sec rate limit — 8 parallel is safe
 
 function getHeaders(): HeadersInit {
   const apiKey = process.env.RENTCAST_API_KEY
@@ -93,44 +94,48 @@ export async function testConnection(): Promise<ConnectionTestResult> {
  * Filters to `status=Active` only (Kelly's self-verify rule).
  */
 export async function discover(query: DiscoveryQuery): Promise<DiscoveredProperty[]> {
+  // Fetch each zip independently with bounded concurrency — stays under Rentcast's
+  // 20 req/sec limit and slashes wall-clock vs. sequential (~5min → ~45s at Austin scale).
+  const perZip = await parallelMap(query.zipCodes, RENTCAST_ZIP_CONCURRENCY, (zip) =>
+    fetchZip(zip, query),
+  )
+  return perZip.flat()
+}
+
+async function fetchZip(zip: string, query: DiscoveryQuery): Promise<DiscoveredProperty[]> {
   const properties: DiscoveredProperty[] = []
+  let offset = 0
+  let fetched = 0
 
-  for (const zip of query.zipCodes) {
-    let offset = 0
-    let fetched = 0
-
-    while (fetched < RENTCAST_MAX_PER_ZIP) {
-      const params: Record<string, string> = {
-        zipCode: zip,
-        status: 'Active',
-        limit: String(RENTCAST_PAGE_SIZE),
-        offset: String(offset),
-      }
-
-      if (query.minPrice) params.minPrice = String(query.minPrice)
-      if (query.maxPrice) params.maxPrice = String(query.maxPrice)
-      if (query.minBeds) params.bedrooms = String(query.minBeds)
-
-      let page: unknown[]
-      try {
-        const data = await rentcastFetch('/listings/sale', params)
-        page = Array.isArray(data) ? data : []
-      } catch (err) {
-        console.error(`Rentcast discover error for ${zip}:`, err)
-        break
-      }
-
-      if (page.length === 0) break
-
-      for (const record of page) {
-        const prop = mapListing(record as Record<string, unknown>)
-        if (prop) properties.push(prop)
-      }
-
-      fetched += page.length
-      offset += page.length
-      if (page.length < RENTCAST_PAGE_SIZE) break
+  while (fetched < RENTCAST_MAX_PER_ZIP) {
+    const params: Record<string, string> = {
+      zipCode: zip,
+      status: 'Active',
+      limit: String(RENTCAST_PAGE_SIZE),
+      offset: String(offset),
     }
+    if (query.minPrice) params.minPrice = String(query.minPrice)
+    if (query.maxPrice) params.maxPrice = String(query.maxPrice)
+    if (query.minBeds) params.bedrooms = String(query.minBeds)
+
+    let page: unknown[]
+    try {
+      const data = await rentcastFetch('/listings/sale', params)
+      page = Array.isArray(data) ? data : []
+    } catch (err) {
+      console.error(`Rentcast discover error for ${zip}:`, err)
+      break
+    }
+    if (page.length === 0) break
+
+    for (const record of page) {
+      const prop = mapListing(record as Record<string, unknown>)
+      if (prop) properties.push(prop)
+    }
+
+    fetched += page.length
+    offset += page.length
+    if (page.length < RENTCAST_PAGE_SIZE) break
   }
 
   return properties
