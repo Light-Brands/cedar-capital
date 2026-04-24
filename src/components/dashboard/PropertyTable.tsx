@@ -308,6 +308,56 @@ const COLUMNS: ColumnDef[] = [
   { key: 'sqft', header: 'SqFt', defaultVisible: true, sortable: true, render: (p) => <span>{fmtNum(p.sqft)}</span>, csv: (p) => p.sqft },
   // 10 — Asking Price
   { key: 'asking_price', header: 'Asking', defaultVisible: true, sortable: true, render: (p) => <span className="font-medium">{fmtUSD(p.asking_price)}</span>, csv: (p) => p.asking_price },
+  // 10b — Offer Range (what Kelly should pay the owner — 65/70/75 rules)
+  //
+  // Opening anchor = 65% × ARV − rehab  (lots of room to negotiate up)
+  // Target offer   = 70% × ARV − rehab  (realistic cash offer)
+  // Max (MAO)      = 75% × ARV − rehab  (absolute ceiling — still profitable)
+  //
+  // If asking < target, the listing is already below your target and worth
+  // calling on now. If asking is between target and max, offer the target and
+  // walk up only to max. If asking > max, skip or make a lowball offer at
+  // the opening anchor only.
+  {
+    key: 'offer_range',
+    header: 'Offer Range',
+    defaultVisible: true,
+    width: '150px',
+    render: (p) => {
+      const a = p.analyses?.[0]
+      const arv = a?.arv ?? 0
+      const rehab = a?.rehab_total ?? 0
+      if (!arv || arv <= 0) return <span className="text-charcoal/40 text-xs">-</span>
+      const low = Math.round(arv * 0.65 - rehab)
+      const target = Math.round(arv * 0.70 - rehab)
+      const max = Math.round(arv * 0.75 - rehab)
+      const asking = p.asking_price ?? 0
+      // Color-code the target against asking:
+      //   asking <= target → green (listing already below target — call now)
+      //   target < asking <= max → amber (room to negotiate)
+      //   asking > max → red (listing overpriced for wholesale)
+      const tone =
+        asking > 0 && asking <= target ? 'text-emerald-700' :
+        asking > 0 && asking <= max ? 'text-amber-700' :
+        'text-charcoal'
+      return (
+        <div className="flex flex-col" title={`Open: ${fmtUSD(low)} · Target: ${fmtUSD(target)} · Max MAO: ${fmtUSD(max)}`}>
+          <span className={clsx('text-xs font-semibold', tone)}>{fmtUSDCompact(low)}–{fmtUSDCompact(max)}</span>
+          <span className="text-[10px] text-charcoal/60">target {fmtUSDCompact(target)}</span>
+        </div>
+      )
+    },
+    csv: (p) => {
+      const a = p.analyses?.[0]
+      const arv = a?.arv ?? 0
+      const rehab = a?.rehab_total ?? 0
+      if (!arv || arv <= 0) return ''
+      const low = Math.round(arv * 0.65 - rehab)
+      const target = Math.round(arv * 0.70 - rehab)
+      const max = Math.round(arv * 0.75 - rehab)
+      return `${low}-${max} (target ${target})`
+    },
+  },
   // 11 — Offer
   { key: 'offer', header: 'Offer', defaultVisible: false, sortable: true, render: (p) => <span>{fmtUSD(p.analyses?.[0]?.offer_price)}</span>, csv: (p) => p.analyses?.[0]?.offer_price ?? null },
   // 12 — List $/sqft
