@@ -523,7 +523,8 @@ function EnrichButtons({
           const phones = data.owner?.phones?.length ?? 0
           setLastMessage(`${phones} phone${phones === 1 ? '' : 's'}${data.distress ? ` · ${data.distress}` : ''}`)
         } else {
-          setLastMessage(`${data.compCount ?? 0} comps${data.verified ? ' ✓' : ''}`)
+          const radius = data.effectiveRadius ? ` @ ${data.effectiveRadius}mi` : ''
+          setLastMessage(`${data.compCount ?? 0} comps${radius}${data.verified ? ' ✓' : ''}`)
         }
       } else {
         setState('failed')

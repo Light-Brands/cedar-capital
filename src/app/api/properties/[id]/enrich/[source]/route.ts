@@ -192,27 +192,41 @@ async function enrichRentcastAvm(
   // Same caveat as batchdata — address is pre-formatted; most external APIs
   // expect just the street portion.
   const streetOnly = property.address.split(',')[0].trim()
-  const rawComps = await rentcast.getSalesComps(
+
+  // Progressive radius: pull up to 20 comps from Rentcast (one API call
+  // regardless of radius), then widen the filter until we hit 3 comps so
+  // rural / low-density properties don't hard-fail at 0.5mi.
+  const allComps = await rentcast.getSalesComps(
     streetOnly,
     property.city,
     property.state,
     property.zip_code ?? '',
-    0.5,
-    10,
+    5.0, // wide pull — we filter down progressively below
+    20,
   )
 
-  if (rawComps.length === 0) {
+  if (allComps.length === 0) {
     await supabase
       .from('properties')
       .update({ last_enriched_at: new Date().toISOString() })
       .eq('id', property.id)
     return NextResponse.json({
       ok: false,
-      message: 'No Rentcast comps found within 0.5 mi',
+      message: 'Rentcast returned no comparables for this address',
     })
   }
 
-  const compSales: CompSale[] = rawComps.map(c => ({
+  const RADIUS_TIERS = [0.5, 1.0, 2.0, 5.0]
+  let chosenComps = allComps.filter(c => c.distanceMiles <= RADIUS_TIERS[0])
+  let effectiveRadius = RADIUS_TIERS[0]
+  for (const r of RADIUS_TIERS) {
+    const inRadius = allComps.filter(c => c.distanceMiles <= r)
+    chosenComps = inRadius
+    effectiveRadius = r
+    if (inRadius.length >= 3) break
+  }
+
+  const compSales: CompSale[] = chosenComps.map(c => ({
     address: c.address,
     salePrice: c.salePrice,
     sqft: c.sqft,
@@ -222,7 +236,9 @@ async function enrichRentcastAvm(
     distanceMiles: c.distanceMiles,
   }))
 
-  const filtered = filterComps(compSales, property.sqft ?? 1500)
+  // filterComps applies its own distance + sqft + age filters, so let it
+  // use the effective radius we landed on above.
+  const filtered = filterComps(compSales, property.sqft ?? 1500, effectiveRadius)
   const compAnalysis = analyzeComps(filtered, property.sqft ?? 1500)
 
   const reanalysis = await reanalyzeOne(supabase, property, compAnalysis)
@@ -236,6 +252,8 @@ async function enrichRentcastAvm(
     ok: true,
     source: 'rentcast_avm',
     compCount: compAnalysis.compCount,
+    effectiveRadius,
+    rawCompsReturned: allComps.length,
     estimatedARV: compAnalysis.estimatedARV,
     avgPricePerSqft: compAnalysis.avgPricePerSqft,
     verified: compAnalysis.compCount >= 3,
