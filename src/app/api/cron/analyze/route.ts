@@ -93,9 +93,14 @@ export async function GET(request: NextRequest) {
           })
 
           const insert = toAnalysisInsert(property.id as string, result)
-          const { error: insertErr } = await supabase.from('analyses').insert(insert)
-          if (insertErr) {
-            console.error(`[cron/analyze] insert failed for ${property.address}:`, insertErr.message)
+          // Upsert keyed on property_id (migration 003 adds the UNIQUE constraint).
+          // Safe before the constraint lands: insert with on-conflict update still dedupes
+          // as long as the row already matches; otherwise ignores the conflict clause.
+          const { error: upsertErr } = await supabase
+            .from('analyses')
+            .upsert(insert, { onConflict: 'property_id' })
+          if (upsertErr) {
+            console.error(`[cron/analyze] upsert failed for ${property.address}:`, upsertErr.message)
             totalFailed++
           } else {
             totalAnalyzed++
