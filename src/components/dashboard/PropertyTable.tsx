@@ -252,23 +252,22 @@ const COLUMNS: ColumnDef[] = [
   // 4 — Date
   { key: 'date', header: 'Date', defaultVisible: true, sortable: true, render: (p) => <span className="text-charcoal/60 text-xs">{fmtDate(p.created_at)}</span>, csv: (p) => fmtDate(p.created_at) },
   // 5 — Link — original listing URL + cross-reference jumps (Zillow / Realtor / Maps / TCAD)
+  // Compact single-character buttons, nowrap, all five fit in one row.
   {
     key: 'link',
     header: 'Links',
     defaultVisible: true,
-    width: '160px',
+    width: '130px',
     render: (p) => {
       const zillow = toZillowUrl(p.address)
       const realtor = toRealtorUrl(p.address)
       const maps = toGoogleMapsUrl(p.address)
       const tcad = toTcadUrl(p.tcad_prop_id)
-      const linkClass = 'px-1.5 py-0.5 text-[10px] font-semibold rounded border bg-white text-cedar-green border-cedar-green/30 hover:bg-cedar-green/10 transition-colors'
+      const linkClass = 'inline-flex items-center justify-center w-6 h-6 text-[10px] font-semibold rounded border bg-white text-cedar-green border-cedar-green/30 hover:bg-cedar-green/10 transition-colors'
       return (
-        <div className="flex flex-wrap items-center gap-1" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center gap-0.5 whitespace-nowrap" onClick={e => e.stopPropagation()}>
           {p.link && (
-            <a href={p.link} target="_blank" rel="noreferrer" className={linkClass} title="Original listing URL">
-              Source ↗
-            </a>
+            <a href={p.link} target="_blank" rel="noreferrer" className={linkClass} title="Original listing URL">↗</a>
           )}
           {zillow && (
             <a href={zillow} target="_blank" rel="noreferrer" className={linkClass} title="Find this address on Zillow">Z</a>
@@ -280,7 +279,7 @@ const COLUMNS: ColumnDef[] = [
             <a href={maps} target="_blank" rel="noreferrer" className={linkClass} title="Open in Google Maps (satellite + street view)">🗺</a>
           )}
           {tcad && (
-            <a href={tcad} target="_blank" rel="noreferrer" className={linkClass} title="Travis Central Appraisal District — full parcel record">TCAD</a>
+            <a href={tcad} target="_blank" rel="noreferrer" className={linkClass} title="Travis Central Appraisal District — full parcel record">🏛</a>
           )}
         </div>
       )
