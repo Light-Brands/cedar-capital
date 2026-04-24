@@ -93,10 +93,17 @@ export function analyzeDeal(input: DealAnalysisInput): DealAnalysisResult {
   const sqft = property.sqft ?? 1500
 
   // Step 1: Determine ARV
-  // Fallback chain: explicit → comps → zestimate → tax-assessed × 1.1 → zip avg × sqft
+  // Fallback chain (best → worst signal):
+  //   explicit → real sold comps → TCAD market_value → zestimate
+  //   → tax-assessed × 1.1 → zip avg × sqft
+  // TCAD market_value is the appraisal district's own estimate of true market
+  // value — more grounded than zip-stats, less current than sold comps.
   let arv = input.arv ?? 0
   if (!arv && compAnalysis?.estimatedARV) {
     arv = compAnalysis.estimatedARV
+  }
+  if (!arv && property.market_value && property.market_value > 0) {
+    arv = property.market_value
   }
   if (!arv && property.zestimate) {
     arv = property.zestimate
