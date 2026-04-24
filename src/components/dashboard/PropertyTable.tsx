@@ -406,8 +406,8 @@ const COLUMNS: ColumnDef[] = [
     const v = p.analyses?.[0]?.roi
     return <span className={clsx('font-semibold', (v ?? 0) > 25 ? 'text-emerald-700' : (v ?? 0) > 0 ? 'text-amber-700' : 'text-charcoal')}>{fmtPct(v)}</span>
   }, csv: (p) => p.analyses?.[0]?.roi ?? null },
-  // 27 — DOM
-  { key: 'dom', header: 'DOM', defaultVisible: false, sortable: true, render: (p) => <span>{p.days_on_market ?? '-'}</span>, csv: (p) => p.days_on_market ?? null },
+  // 27 — DOM (days on market) — default visible since it drives time-pressure decisions
+  { key: 'dom', header: 'DOM', defaultVisible: true, sortable: true, render: (p) => <span>{p.days_on_market ?? '-'}</span>, csv: (p) => p.days_on_market ?? null },
   // 28 — MAO
   { key: 'mao', header: 'MAO', defaultVisible: true, sortable: true, render: (p) => <span className="font-medium">{fmtUSD(p.analyses?.[0]?.mao)}</span>, csv: (p) => p.analyses?.[0]?.mao ?? null },
   // 29 — Wholesale Profit
@@ -633,27 +633,54 @@ interface ColumnPrefs {
   order: string[]
   /** Keys that should render today. Subset of `order`. */
   visible: string[]
+  /** Migration version. Bumped when we add new default-visible columns so
+   *  returning users pick them up automatically without losing customizations. */
+  version?: number
 }
+
+/**
+ * Bump when a column's defaultVisible flips to true, OR when we want
+ * returning users' saved prefs to pick up a new-to-this-version default.
+ * Migrations listed in the heal effect below by version.
+ */
+const COLUMN_PREFS_VERSION = 2
 
 export default function PropertyTable({ rows, sortColumn, sortOrder, onSort, onReviewStatusChange, onEnriched }: Props) {
   const defaultPrefs = useMemo<ColumnPrefs>(
     () => ({
       order: COLUMNS.map(c => c.key),
       visible: COLUMNS.filter(c => c.defaultVisible).map(c => c.key),
+      version: COLUMN_PREFS_VERSION,
     }),
     [],
   )
   const [prefs, setPrefs] = useLocalStorage<ColumnPrefs>('cedar.properties.columnPrefs', defaultPrefs)
   const [showColumnPicker, setShowColumnPicker] = useState(false)
 
-  // Heal: any COLUMNS added since the user's prefs were saved get appended at
-  // the end so new features surface without wiping the user's customizations.
+  // Heal:
+  //   1. Append any new COLUMNS entries to the user's saved order so new
+  //      features surface without wiping customizations.
+  //   2. Run version migrations: add newly-defaulted-visible columns to the
+  //      user's visible set once, then stamp the current version.
   useEffect(() => {
     const known = new Set(prefs.order)
     const missing = COLUMNS.map(c => c.key).filter(k => !known.has(k))
-    if (missing.length > 0) {
-      setPrefs(p => ({ ...p, order: [...p.order, ...missing] }))
-    }
+    const userVersion = prefs.version ?? 1
+    const needsMigrate = userVersion < COLUMN_PREFS_VERSION
+    if (missing.length === 0 && !needsMigrate) return
+
+    setPrefs(p => {
+      const visibleSet = new Set(p.visible)
+      if (userVersion < 2) {
+        // v2: DOM is now default-visible
+        visibleSet.add('dom')
+      }
+      return {
+        order: [...p.order, ...missing],
+        visible: Array.from(visibleSet),
+        version: COLUMN_PREFS_VERSION,
+      }
+    })
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
