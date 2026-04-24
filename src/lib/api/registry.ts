@@ -14,15 +14,16 @@ import type { LeadSourceAdapter } from './source-adapter'
 import { rentcastAdapter } from './rentcast'
 import { realtyInUsAdapter } from './realty-in-us'
 import { realtor16Adapter } from './realtor16'
+import { craigslistAustinAdapter } from './craigslist-austin'
 
 export const ADAPTERS: Record<string, LeadSourceAdapter> = {
   [rentcastAdapter.slug]: rentcastAdapter,
   [realtyInUsAdapter.slug]: realtyInUsAdapter,
   [realtor16Adapter.slug]: realtor16Adapter,
-  // redfin_rapidapi: redfinAdapter — URL schema needs Austin city ID tuning
-  // loopnet: loopnetAdapter — commercial, disabled by default
-  // craigslist_austin: craigslistAdapter — pending ToS decision
-  // attom / batchdata / estated are existing modules not yet wrapped as adapters
+  [craigslistAustinAdapter.slug]: craigslistAustinAdapter,
+  // redfin_rapidapi: URL schema needs Austin city ID tuning
+  // loopnet: commercial, disabled by default
+  // attom / batchdata / estated are existing modules not yet wrapped as listings adapters
 }
 
 export function getAdapter(slug: string): LeadSourceAdapter | null {
