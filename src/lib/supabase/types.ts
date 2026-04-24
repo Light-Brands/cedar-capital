@@ -83,15 +83,34 @@ export interface Property {
   link: string | null
   photos: string[] | null
   raw_data: Json | null
+  // Added by migration 001_lead_flow_phase1
+  special_features: string[] | null
+  agent_name: string | null
+  agent_phone: string | null
+  agent_email: string | null
+  listing_status: 'Active' | 'Pending' | 'Closed' | 'Expired' | 'Unknown' | null
+  review_status: 'New' | 'Reviewed' | 'Contacted' | 'Dead' | null
+  notes: string | null
+  licensing_tag: string | null
   created_at: string
   updated_at: string
 }
 
-export type PropertyInsert = Omit<Property, 'id' | 'created_at' | 'updated_at'> & {
-  id?: string
-  created_at?: string
-  updated_at?: string
-}
+export type PropertyInsert =
+  Omit<Property, 'id' | 'created_at' | 'updated_at' | 'special_features' | 'agent_name' | 'agent_phone' | 'agent_email' | 'listing_status' | 'review_status' | 'notes' | 'licensing_tag'> & {
+    id?: string
+    created_at?: string
+    updated_at?: string
+    // Migration 001 fields — optional on insert; DB has sensible defaults or null is fine
+    special_features?: string[] | null
+    agent_name?: string | null
+    agent_phone?: string | null
+    agent_email?: string | null
+    listing_status?: 'Active' | 'Pending' | 'Closed' | 'Expired' | 'Unknown' | null
+    review_status?: 'New' | 'Reviewed' | 'Contacted' | 'Dead' | null
+    notes?: string | null
+    licensing_tag?: string | null
+  }
 
 export type PropertyUpdate = Partial<PropertyInsert>
 
@@ -231,6 +250,42 @@ export type OutreachLogInsert = Omit<OutreachLogEntry, 'id' | 'response_text' | 
 }
 
 export type OutreachLogUpdate = Partial<OutreachLogInsert>
+
+// ---------- Lead Sources (migration 001) ----------
+export type SourceKind = 'listings' | 'enrichment' | 'skip_trace'
+export type SourceSyncStatus = 'success' | 'partial' | 'failed' | 'needs_config' | 'never_run'
+
+export interface LeadSource {
+  slug: string
+  display_name: string
+  kind: SourceKind
+  enabled: boolean
+  config: Json
+  env_key_names: string[] | null
+  docs_url: string | null
+  notes: string | null
+  last_sync_at: string | null
+  last_sync_status: SourceSyncStatus | null
+  last_sync_count: number | null
+  last_sync_duration_ms: number | null
+  last_error: string | null
+  total_synced_count: number
+  total_errors_count: number
+  created_at: string
+  updated_at: string
+}
+
+export interface LeadSourceSync {
+  id: string
+  source_slug: string
+  started_at: string
+  finished_at: string | null
+  status: 'running' | 'success' | 'partial' | 'failed'
+  count: number
+  duration_ms: number | null
+  error_message: string | null
+  metadata: Json
+}
 
 // ---------- Austin Zip Codes ----------
 export interface AustinZipCode {
