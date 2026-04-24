@@ -164,13 +164,13 @@ function listSqft(p: FullPropertyRow): number | null {
 }
 
 const COLUMNS: ColumnDef[] = [
-  // 1 — Property Address (sticky, always visible)
+  // 1 — Property Address (inline: 🆕 · address · TYPE · ⚠)
   {
     key: 'address',
     header: 'Address',
     defaultVisible: true,
     sortable: true,
-    width: '240px',
+    width: '300px',
     render: (p) => {
       const unitType = classifyUnitType({
         property_type: p.property_type,
@@ -181,31 +181,36 @@ const COLUMNS: ColumnDef[] = [
       })
       const mismatch = isParcelMismatchLikely(unitType, p.market_value, p.asking_price)
       return (
-        <div className="relative">
+        <div className="flex items-center gap-1.5 whitespace-nowrap">
           {isNew24h(p.created_at) && (
-            <span className="absolute -left-2 -top-1 text-[10px] bg-cedar-green text-cream px-1.5 py-0.5 rounded font-semibold">🆕</span>
+            <span className="flex-shrink-0 text-[9px] bg-cedar-green text-cream px-1 py-0.5 rounded font-semibold">NEW</span>
           )}
-          <Link href={`/dashboard/properties/${p.id}`} className="font-medium text-cedar-green hover:underline block">
+          <Link
+            href={`/dashboard/properties/${p.id}`}
+            className="font-medium text-cedar-green hover:underline truncate"
+            title={p.address}
+          >
             {p.address}
           </Link>
-          <span className="flex items-center gap-1 mt-0.5 text-[10px]">
-            <span className={clsx(
-              'px-1 py-0.5 rounded font-medium border',
+          <span
+            className={clsx(
+              'flex-shrink-0 text-[10px] px-1 py-0.5 rounded font-medium border',
               unitType === 'SFR' ? 'bg-cedar-green/10 text-cedar-green border-cedar-green/20' :
               isMultiUnit(unitType) ? 'bg-capital-gold/15 text-capital-gold border-capital-gold/30' :
               'bg-stone-100 text-stone-600 border-stone-300',
-            )}>
-              {unitType}
-            </span>
-            {mismatch && (
-              <span
-                title="TCAD market value looks like a whole-building parcel, not this unit — ARV may be inflated. Run Comps for a real sold-comp estimate."
-                className="px-1 py-0.5 rounded bg-amber-50 text-amber-800 border border-amber-300 font-medium"
-              >
-                ⚠ Parcel?
-              </span>
             )}
+            title={`Classified as ${unitType}`}
+          >
+            {unitType}
           </span>
+          {mismatch && (
+            <span
+              title="TCAD market_value looks like a whole-building parcel, not this unit. Run Comps for a real sold-comp ARV."
+              className="flex-shrink-0 text-[10px] px-1 py-0.5 rounded bg-amber-50 text-amber-800 border border-amber-300 font-medium"
+            >
+              ⚠
+            </span>
+          )}
         </div>
       )
     },
@@ -437,12 +442,12 @@ const COLUMNS: ColumnDef[] = [
     if (!name && !phone) return <span className="text-charcoal/40">-</span>
     return <span className="text-xs">{name}{phone ? ` · ${phone}` : ''}</span>
   }, csv: (p) => [p.agent_name, p.agent_phone, p.agent_email].filter(Boolean).join(' · ') },
-  // 35b — Owner of record (from TCAD). Most workable signal for cold outreach.
+  // 35b — Owner of record (TCAD). Inline: name · TYPE · ✈ · 🏠 · ⚠
   {
     key: 'owner',
     header: 'Owner',
     defaultVisible: true,
-    width: '220px',
+    width: '240px',
     render: (p) => {
       if (!p.owner_name) return <span className="text-charcoal/40 text-xs">-</span>
       const type = classifyOwner(p.owner_name)
@@ -453,14 +458,12 @@ const COLUMNS: ColumnDef[] = [
         type === 'Government' ? 'bg-red-50 text-red-700 border-red-200' :
         'bg-stone-50 text-stone-500 border-stone-200'
       return (
-        <div className="flex flex-col gap-0.5">
-          <span className="text-xs text-charcoal font-medium truncate" title={p.owner_name}>{p.owner_name}</span>
-          <span className="flex items-center gap-1">
-            <span className={clsx('text-[10px] px-1 py-0.5 rounded border font-semibold', badgeClass)}>{type}</span>
-            {p.is_absentee && <span className="text-[10px] text-capital-gold" title="Absentee owner — mailing address differs from property">✈ abs</span>}
-            {p.has_homestead_exemption && <span className="text-[10px] text-stone-500" title="Homestead exemption — primary residence">🏠</span>}
-            {p.distress_signal && <span className="text-[10px] bg-red-50 text-red-800 border border-red-200 px-1 rounded" title={p.distress_signal}>⚠ {p.distress_signal}</span>}
-          </span>
+        <div className="flex items-center gap-1.5 whitespace-nowrap" title={p.owner_name}>
+          <span className="text-xs text-charcoal font-medium truncate">{p.owner_name}</span>
+          <span className={clsx('flex-shrink-0 text-[10px] px-1 py-0.5 rounded border font-semibold', badgeClass)}>{type}</span>
+          {p.is_absentee && <span className="flex-shrink-0 text-[10px] text-capital-gold" title="Absentee owner — mailing address differs from property">✈</span>}
+          {p.has_homestead_exemption && <span className="flex-shrink-0 text-[10px] text-stone-500" title="Homestead exemption — primary residence">🏠</span>}
+          {p.distress_signal && <span className="flex-shrink-0 text-[10px] bg-red-50 text-red-800 border border-red-200 px-1 rounded" title={p.distress_signal}>⚠</span>}
         </div>
       )
     },
@@ -533,41 +536,47 @@ function EnrichButtons({
     }
   }
 
+  // One-line inline buttons. Result goes into the title attribute so the row
+  // stays a single line — hover to see the phone count / comp count.
+  const ownerTitle = lastMessage && ownerState !== 'idle'
+    ? `Owner enrichment: ${lastMessage}`
+    : 'Skip trace via BatchData — owner phone, email, distress signals (~$0.10/call)'
+  const compsTitle = lastMessage && compsState !== 'idle'
+    ? `Comp enrichment: ${lastMessage}`
+    : 'Rentcast AVM — real sold comps within 0.5mi, refined ARV, verified flag'
+
   return (
-    <div className="flex flex-col gap-1" onClick={e => e.stopPropagation()}>
-      <div className="flex gap-1">
-        <button
-          type="button"
-          onClick={() => trigger('batchdata')}
-          disabled={ownerState === 'loading'}
-          title="Skip trace via BatchData — owner phone, email, distress signals"
-          className={clsx(
-            'text-[10px] font-semibold px-2 py-0.5 rounded border transition-colors whitespace-nowrap',
-            ownerState === 'loading' && 'bg-stone-100 text-stone-500 border-stone-300',
-            ownerState === 'idle' && 'bg-white text-cedar-green border-cedar-green/30 hover:bg-cedar-green/5',
-            ownerState === 'done' && 'bg-emerald-50 text-emerald-800 border-emerald-300',
-            ownerState === 'failed' && 'bg-red-50 text-red-700 border-red-300',
-          )}
-        >
-          {ownerState === 'loading' ? '…' : ownerState === 'done' ? '✓' : ownerState === 'failed' ? '✕' : '📞'} Owner
-        </button>
-        <button
-          type="button"
-          onClick={() => trigger('rentcast_avm')}
-          disabled={compsState === 'loading'}
-          title="Rentcast AVM — real sold comps within 0.5 mi, refined ARV, verified flag"
-          className={clsx(
-            'text-[10px] font-semibold px-2 py-0.5 rounded border transition-colors whitespace-nowrap',
-            compsState === 'loading' && 'bg-stone-100 text-stone-500 border-stone-300',
-            compsState === 'idle' && 'bg-white text-cedar-green border-cedar-green/30 hover:bg-cedar-green/5',
-            compsState === 'done' && 'bg-emerald-50 text-emerald-800 border-emerald-300',
-            compsState === 'failed' && 'bg-red-50 text-red-700 border-red-300',
-          )}
-        >
-          {compsState === 'loading' ? '…' : compsState === 'done' ? '✓' : compsState === 'failed' ? '✕' : '📊'} Comps
-        </button>
-      </div>
-      {lastMessage && <span className="text-[10px] text-charcoal/60">{lastMessage}</span>}
+    <div className="flex items-center gap-1 whitespace-nowrap" onClick={e => e.stopPropagation()}>
+      <button
+        type="button"
+        onClick={() => trigger('batchdata')}
+        disabled={ownerState === 'loading'}
+        title={ownerTitle}
+        className={clsx(
+          'inline-flex items-center justify-center w-6 h-6 text-[11px] font-semibold rounded border transition-colors',
+          ownerState === 'loading' && 'bg-stone-100 text-stone-500 border-stone-300',
+          ownerState === 'idle' && 'bg-white text-cedar-green border-cedar-green/30 hover:bg-cedar-green/5',
+          ownerState === 'done' && 'bg-emerald-50 text-emerald-800 border-emerald-300',
+          ownerState === 'failed' && 'bg-red-50 text-red-700 border-red-300',
+        )}
+      >
+        {ownerState === 'loading' ? '…' : ownerState === 'done' ? '✓' : ownerState === 'failed' ? '✕' : '📞'}
+      </button>
+      <button
+        type="button"
+        onClick={() => trigger('rentcast_avm')}
+        disabled={compsState === 'loading'}
+        title={compsTitle}
+        className={clsx(
+          'inline-flex items-center justify-center w-6 h-6 text-[11px] font-semibold rounded border transition-colors',
+          compsState === 'loading' && 'bg-stone-100 text-stone-500 border-stone-300',
+          compsState === 'idle' && 'bg-white text-cedar-green border-cedar-green/30 hover:bg-cedar-green/5',
+          compsState === 'done' && 'bg-emerald-50 text-emerald-800 border-emerald-300',
+          compsState === 'failed' && 'bg-red-50 text-red-700 border-red-300',
+        )}
+      >
+        {compsState === 'loading' ? '…' : compsState === 'done' ? '✓' : compsState === 'failed' ? '✕' : '📊'}
+      </button>
     </div>
   )
 }
