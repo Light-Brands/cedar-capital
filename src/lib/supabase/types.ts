@@ -223,6 +223,13 @@ export interface Analysis {
   comp_addresses: string[] | null
   comp_prices: number[] | null
   comp_avg_per_sqft: number | null
+  // Added by migration 001_lead_flow_phase1
+  discount_pct: number | null
+  total_in: number | null
+  gross_profit: number | null
+  verified: boolean | null
+  badge: 'Perfect Fit' | 'Strong Match' | 'Could Work' | 'Needs a Reason' | 'Pass' | null
+  comp_per_sqft: number[] | null
   created_at: string
 }
 
