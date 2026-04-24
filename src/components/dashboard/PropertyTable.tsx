@@ -99,7 +99,10 @@ export interface EnrichmentResult {
   }
   distress?: string | null
   compCount?: number
+  effectiveRadius?: number
+  rawCompsReturned?: number
   estimatedARV?: number
+  avgPricePerSqft?: number
   verified?: boolean
   reanalysis?: {
     arv: number
