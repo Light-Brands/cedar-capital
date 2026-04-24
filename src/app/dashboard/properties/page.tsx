@@ -126,23 +126,35 @@ export default function PropertiesPage() {
   const loadProperties = useCallback(async () => {
     setLoading(true)
 
-    // Badge filter needs an INNER join on analyses so we don't just slice the
-    // top-500-by-date and filter client-side (which hides actionable rows
-    // below the fold). Nested-table syntax: analyses!inner(...) + filter on
-    // analyses.badge.
-    const analysesSelect = filters.badge
-      ? `analyses!inner (
-          offer_price, arv, arv_per_sqft, diff, rehab_total, selling_costs, total_cost,
-          est_profit, monthly_payment, months_held, profit_with_finance, roi, mao,
-          wholesale_profit, deal_score, deal_score_numeric, comp_addresses, comp_prices,
-          comp_avg_per_sqft, discount_pct, total_in, gross_profit, verified, badge
-        )`
-      : `analyses (
-          offer_price, arv, arv_per_sqft, diff, rehab_total, selling_costs, total_cost,
-          est_profit, monthly_payment, months_held, profit_with_finance, roi, mao,
-          wholesale_profit, deal_score, deal_score_numeric, comp_addresses, comp_prices,
-          comp_avg_per_sqft, discount_pct, total_in, gross_profit, verified, badge
-        )`
+    // Map UI sort keys to the actual `analyses` column names Supabase can
+    // order on. Any key present here triggers server-side sort on the
+    // joined table — so the user sees the actual top-scored rows across
+    // the whole 12k+ feed, not just the top-500 newest.
+    const analysisSortColumns: Record<string, string> = {
+      deal_score: 'deal_score_numeric',
+      roi: 'roi',
+      mao: 'mao',
+      wholesale_profit: 'wholesale_profit',
+      discount_pct: 'discount_pct',
+      arv: 'arv',
+      rehab: 'rehab_total',
+      total_in: 'total_in',
+      est_profit: 'est_profit',
+      gross_profit: 'gross_profit',
+      offer: 'offer_price',
+    }
+    const sortsOnAnalysis = sortColumn in analysisSortColumns
+
+    // INNER join when we need to filter or sort on analyses — excludes rows
+    // without an analysis (they'd sort as NULL and crowd the top anyway).
+    const needsInner = Boolean(filters.badge || sortsOnAnalysis)
+    const analysesJoin = needsInner ? 'analyses!inner' : 'analyses'
+    const analysesSelect = `${analysesJoin} (
+      offer_price, arv, arv_per_sqft, diff, rehab_total, selling_costs, total_cost,
+      est_profit, monthly_payment, months_held, profit_with_finance, roi, mao,
+      wholesale_profit, deal_score, deal_score_numeric, comp_addresses, comp_prices,
+      comp_avg_per_sqft, discount_pct, total_in, gross_profit, verified, badge
+    )`
 
     let query = supabase
       .from('properties')
@@ -155,8 +167,29 @@ export default function PropertiesPage() {
         distress_signal, special_features, notes,
         ${analysesSelect}
       `)
-      .order('created_at', { ascending: sortOrder === 'asc' })
-      .limit(filters.badge ? 2000 : 500)
+      .limit(needsInner ? 2000 : 500)
+
+    // Primary sort: analysis-derived field (server side) if applicable,
+    // otherwise created_at. Secondary fallback to created_at desc keeps ties stable.
+    if (sortsOnAnalysis) {
+      query = query.order(analysisSortColumns[sortColumn], {
+        referencedTable: 'analyses',
+        ascending: sortOrder === 'asc',
+        nullsFirst: false,
+      })
+    } else if (sortColumn === 'asking_price' || sortColumn === 'sqft' || sortColumn === 'beds' || sortColumn === 'baths' || sortColumn === 'dom') {
+      const colMap: Record<string, string> = {
+        asking_price: 'asking_price', sqft: 'sqft', beds: 'beds', baths: 'baths', dom: 'days_on_market',
+      }
+      query = query.order(colMap[sortColumn], { ascending: sortOrder === 'asc', nullsFirst: false })
+    } else if (sortColumn === 'list_type' || sortColumn === 'source') {
+      query = query.order(sortColumn, { ascending: sortOrder === 'asc' })
+    } else if (sortColumn === 'address') {
+      query = query.order('address', { ascending: sortOrder === 'asc' })
+    } else {
+      // 'date' and anything else → created_at
+      query = query.order('created_at', { ascending: sortOrder === 'asc' })
+    }
 
     if (filters.zip) query = query.eq('zip_code', filters.zip)
     if (filters.listType) query = query.eq('list_type', filters.listType)
@@ -213,46 +246,12 @@ export default function PropertiesPage() {
       })
     }
 
-    // Client-side sorting for analysis-derived columns
-    const accessor = (r: FullPropertyRow, key: string): number => {
-      const a = r.analyses?.[0]
-      switch (key) {
-        case 'address': return 0 // alphabetical handled below
-        case 'date': return new Date(r.created_at).getTime()
-        case 'beds': return r.beds ?? 0
-        case 'baths': return r.baths ?? 0
-        case 'sqft': return r.sqft ?? 0
-        case 'asking_price': return r.asking_price ?? 0
-        case 'offer': return a?.offer_price ?? 0
-        case 'list_per_sqft': return (r.asking_price && r.sqft) ? r.asking_price / r.sqft : 0
-        case 'discount_pct': return a?.discount_pct ?? 0
-        case 'rehab': return a?.rehab_total ?? 0
-        case 'total_in': return a?.total_in ?? 0
-        case 'arv': return a?.arv ?? 0
-        case 'gross_profit': return a?.gross_profit ?? 0
-        case 'est_profit': return a?.est_profit ?? 0
-        case 'roi': return a?.roi ?? 0
-        case 'dom': return r.days_on_market ?? 0
-        case 'mao': return a?.mao ?? 0
-        case 'wholesale_profit': return a?.wholesale_profit ?? 0
-        case 'deal_score': return a?.deal_score_numeric ?? 0
-        default: return 0
-      }
-    }
-
-    if (sortColumn === 'address') {
-      loaded.sort((a, b) => sortOrder === 'asc' ? a.address.localeCompare(b.address) : b.address.localeCompare(a.address))
-    } else if (sortColumn === 'list_type' || sortColumn === 'source') {
-      const k = sortColumn
+    // For client-only sort keys (list_per_sqft is derived, rehab accessor etc.)
+    // fall back to local sort. Everything else was sorted at the DB.
+    if (sortColumn === 'list_per_sqft') {
       loaded.sort((a, b) => {
-        const va = String((a as unknown as Record<string, string | null>)[k] ?? '')
-        const vb = String((b as unknown as Record<string, string | null>)[k] ?? '')
-        return sortOrder === 'asc' ? va.localeCompare(vb) : vb.localeCompare(va)
-      })
-    } else if (sortColumn !== 'date') {
-      loaded.sort((a, b) => {
-        const va = accessor(a, sortColumn)
-        const vb = accessor(b, sortColumn)
+        const va = (a.asking_price && a.sqft) ? a.asking_price / a.sqft : 0
+        const vb = (b.asking_price && b.sqft) ? b.asking_price / b.sqft : 0
         return sortOrder === 'asc' ? va - vb : vb - va
       })
     }

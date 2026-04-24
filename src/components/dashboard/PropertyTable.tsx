@@ -1,6 +1,6 @@
 'use client'
 
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { clsx } from 'clsx'
 import ScoreBadge from './ScoreBadge'
@@ -613,24 +613,65 @@ function ReviewChip({ status, onCycle }: { status: string | null; onCycle: () =>
 // Main table
 // ============================================================
 
+interface ColumnPrefs {
+  /** Full list of column keys in the user's preferred order. Includes hidden. */
+  order: string[]
+  /** Keys that should render today. Subset of `order`. */
+  visible: string[]
+}
+
 export default function PropertyTable({ rows, sortColumn, sortOrder, onSort, onReviewStatusChange, onEnriched }: Props) {
-  // Column visibility persists per-browser via localStorage
-  const defaultKeys = useMemo(
-    () => COLUMNS.filter(c => c.defaultVisible).map(c => c.key),
+  const defaultPrefs = useMemo<ColumnPrefs>(
+    () => ({
+      order: COLUMNS.map(c => c.key),
+      visible: COLUMNS.filter(c => c.defaultVisible).map(c => c.key),
+    }),
     [],
   )
-  const [visibleKeys, setVisibleKeys] = useLocalStorage<string[]>('cedar.properties.columns', defaultKeys)
-  const visible = useMemo(() => new Set(visibleKeys), [visibleKeys])
+  const [prefs, setPrefs] = useLocalStorage<ColumnPrefs>('cedar.properties.columnPrefs', defaultPrefs)
   const [showColumnPicker, setShowColumnPicker] = useState(false)
 
-  const visibleColumns = useMemo(() => COLUMNS.filter(c => visible.has(c.key)), [visible])
+  // Heal: any COLUMNS added since the user's prefs were saved get appended at
+  // the end so new features surface without wiping the user's customizations.
+  useEffect(() => {
+    const known = new Set(prefs.order)
+    const missing = COLUMNS.map(c => c.key).filter(k => !known.has(k))
+    if (missing.length > 0) {
+      setPrefs(p => ({ ...p, order: [...p.order, ...missing] }))
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const visibleSet = useMemo(() => new Set(prefs.visible), [prefs.visible])
+  // Compute visible columns in USER ORDER (not COLUMNS source order), filtered
+  // to only the keys marked visible. Missing keys (e.g. a COLUMNS entry that
+  // was later deleted) are silently skipped.
+  const visibleColumns = useMemo(() => {
+    return prefs.order
+      .filter(k => visibleSet.has(k))
+      .map(k => COLUMNS.find(c => c.key === k))
+      .filter((c): c is ColumnDef => !!c)
+  }, [prefs.order, visibleSet])
 
   function toggleCol(key: string) {
-    setVisibleKeys(prev => {
-      const set = new Set(prev)
+    setPrefs(p => {
+      const set = new Set(p.visible)
       if (set.has(key)) set.delete(key)
       else set.add(key)
-      return Array.from(set)
+      return { ...p, visible: Array.from(set) }
+    })
+  }
+
+  function moveCol(key: string, delta: -1 | 1) {
+    setPrefs(p => {
+      const idx = p.order.indexOf(key)
+      if (idx < 0) return p
+      const target = idx + delta
+      if (target < 0 || target >= p.order.length) return p
+      const next = [...p.order]
+      const [moved] = next.splice(idx, 1)
+      next.splice(target, 0, moved)
+      return { ...p, order: next }
     })
   }
 
@@ -672,23 +713,90 @@ export default function PropertyTable({ rows, sortColumn, sortOrder, onSort, onR
         <div className="text-xs text-charcoal/50">{rows.length} rows shown</div>
       </div>
 
-      {/* Column picker */}
+      {/* Column picker — reorder via ↑ ↓ arrows, toggle visibility via checkbox */}
       {showColumnPicker && (
         <div className="bg-white border border-stone/30 rounded-card p-3">
           <div className="flex items-center justify-between mb-2">
-            <span className="text-xs font-semibold text-charcoal/70 uppercase tracking-wide">Column Visibility</span>
+            <div>
+              <span className="text-xs font-semibold text-charcoal/70 uppercase tracking-wide">Columns</span>
+              <span className="ml-2 text-[10px] text-charcoal/50">Reorder with ↑ ↓ · Toggle with checkbox · All sticky across sessions</span>
+            </div>
             <div className="flex gap-2">
-              <button type="button" onClick={() => setVisibleKeys(COLUMNS.map(c => c.key))} className="text-xs text-cedar-green hover:underline">Show all</button>
-              <button type="button" onClick={() => setVisibleKeys(defaultKeys)} className="text-xs text-charcoal/60 hover:text-charcoal">Reset</button>
+              <button
+                type="button"
+                onClick={() => setPrefs(p => ({ ...p, visible: COLUMNS.map(c => c.key) }))}
+                className="text-xs text-cedar-green hover:underline"
+              >
+                Show all
+              </button>
+              <button
+                type="button"
+                onClick={() => setPrefs(defaultPrefs)}
+                className="text-xs text-charcoal/60 hover:text-charcoal"
+                title="Restore original column order + default visibility"
+              >
+                Reset
+              </button>
             </div>
           </div>
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-1 text-xs">
-            {COLUMNS.map(c => (
-              <label key={c.key} className="flex items-center gap-1.5 cursor-pointer hover:bg-sand/30 px-1.5 py-1 rounded">
-                <input type="checkbox" checked={visible.has(c.key)} onChange={() => toggleCol(c.key)} className="accent-cedar-green" />
-                <span>{c.header}</span>
-              </label>
-            ))}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-0.5 text-xs max-h-96 overflow-auto">
+            {prefs.order.map((key, idx) => {
+              const col = COLUMNS.find(c => c.key === key)
+              if (!col) return null
+              const isVisible = visibleSet.has(key)
+              const isFirst = idx === 0
+              const isLast = idx === prefs.order.length - 1
+              return (
+                <div
+                  key={key}
+                  className={clsx(
+                    'flex items-center gap-1.5 px-2 py-1 rounded',
+                    isVisible ? 'hover:bg-sand/30' : 'opacity-60 hover:bg-sand/20',
+                  )}
+                >
+                  <span className="text-[10px] text-charcoal/40 w-6 font-mono">{idx + 1}.</span>
+                  <button
+                    type="button"
+                    onClick={() => moveCol(key, -1)}
+                    disabled={isFirst}
+                    title="Move up"
+                    className={clsx(
+                      'w-5 h-5 flex items-center justify-center rounded border text-[10px]',
+                      isFirst
+                        ? 'bg-stone-50 text-stone-300 border-stone-200 cursor-not-allowed'
+                        : 'bg-white text-cedar-green border-cedar-green/30 hover:bg-cedar-green/5',
+                    )}
+                  >
+                    ↑
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => moveCol(key, 1)}
+                    disabled={isLast}
+                    title="Move down"
+                    className={clsx(
+                      'w-5 h-5 flex items-center justify-center rounded border text-[10px]',
+                      isLast
+                        ? 'bg-stone-50 text-stone-300 border-stone-200 cursor-not-allowed'
+                        : 'bg-white text-cedar-green border-cedar-green/30 hover:bg-cedar-green/5',
+                    )}
+                  >
+                    ↓
+                  </button>
+                  <label className="flex items-center gap-1.5 cursor-pointer flex-1 min-w-0">
+                    <input
+                      type="checkbox"
+                      checked={isVisible}
+                      onChange={() => toggleCol(key)}
+                      className="accent-cedar-green"
+                    />
+                    <span className={isVisible ? 'text-charcoal truncate' : 'text-charcoal/50 truncate'}>
+                      {col.header}
+                    </span>
+                  </label>
+                </div>
+              )
+            })}
           </div>
         </div>
       )}
