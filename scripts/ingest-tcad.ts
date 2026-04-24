@@ -33,7 +33,8 @@ const TCAD_ZIP_URL =
 const TMP_DIR = '/tmp/tcad'
 const ZIP_PATH = path.join(TMP_DIR, 'tcad_2026_preliminary.zip')
 const EXTRACT_DIR = path.join(TMP_DIR, 'extracted')
-const BATCH_SIZE = 500
+const BATCH_SIZE = 100
+const FLUSH_CONCURRENCY = 20
 
 // ============================================================
 // env loader
@@ -277,12 +278,27 @@ function buildUpdate(line: string, propId: string): TcadUpdate {
 
 async function flush(supabase: SupabaseClient, batch: TcadUpdate[]): Promise<number> {
   if (batch.length === 0) return 0
-  const { error } = await supabase.from('properties').upsert(batch, { onConflict: 'id' })
-  if (error) {
-    console.error('  ✗ batch failed:', error.message)
-    return 0
+  // Supabase upsert always validates the INSERT payload (even when ON CONFLICT
+  // would UPDATE), so a partial payload fails NOT NULL on `address`. Use actual
+  // UPDATE per row, fired in small concurrent waves.
+  let successes = 0
+  for (let i = 0; i < batch.length; i += FLUSH_CONCURRENCY) {
+    const wave = batch.slice(i, i + FLUSH_CONCURRENCY)
+    const results = await Promise.all(
+      wave.map(row => {
+        const { id, ...patch } = row
+        return supabase.from('properties').update(patch).eq('id', id)
+      }),
+    )
+    for (const r of results) {
+      if (r.error) {
+        console.error(`  ✗ update failed: ${r.error.message}`)
+      } else {
+        successes++
+      }
+    }
   }
-  return batch.length
+  return successes
 }
 
 // ============================================================

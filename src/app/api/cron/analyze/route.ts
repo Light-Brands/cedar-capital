@@ -35,6 +35,10 @@ export async function GET(request: NextRequest) {
 
   const start = Date.now()
   const supabase = createServerClient()
+  // ?rebuild=true re-scores every property, even ones that already have an
+  // analysis. Used after upstream enrichment (TCAD ingest, new comps provider)
+  // to refresh ARV/badge/verified across the whole feed.
+  const rebuild = request.nextUrl.searchParams.get('rebuild') === 'true'
 
   try {
     // Load zip stats once for the whole run
@@ -45,8 +49,9 @@ export async function GET(request: NextRequest) {
     let totalSkipped = 0
     let roundsRan = 0
 
-    // Load every already-analyzed property_id once (cheap: single col, paged).
-    const analyzedIds = await loadAllAnalyzedIds(supabase)
+    // When rebuilding, treat everything as un-analyzed so upsert rewrites the
+    // analysis row with fresh TCAD-driven inputs.
+    const analyzedIds = rebuild ? new Set<string>() : await loadAllAnalyzedIds(supabase)
 
     // Paginate through properties (id-ordered for stable paging).
     // Each round fetches the next slice and filters out already-analyzed ids.
@@ -121,6 +126,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({
       success: true,
       timestamp: new Date().toISOString(),
+      rebuild,
       analyzed: totalAnalyzed,
       failed: totalFailed,
       skipped: totalSkipped,
