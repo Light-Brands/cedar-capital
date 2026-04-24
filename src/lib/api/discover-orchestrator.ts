@@ -27,16 +27,27 @@ export interface DiscoverSummary {
   sources: PerSourceResult[]
 }
 
-export async function runDiscover(): Promise<DiscoverSummary> {
+export interface RunDiscoverOptions {
+  /** If set, only run this one source (still enforces enabled=true). */
+  sourceSlug?: string
+}
+
+export async function runDiscover(options: RunDiscoverOptions = {}): Promise<DiscoverSummary> {
   const supabase = createServerClient()
 
   // Load enabled listings sources and Austin zip codes in parallel
+  let sourcesQuery = supabase
+    .from('lead_sources')
+    .select('slug, total_synced_count, total_errors_count')
+    .eq('enabled', true)
+    .eq('kind', 'listings')
+
+  if (options.sourceSlug) {
+    sourcesQuery = sourcesQuery.eq('slug', options.sourceSlug)
+  }
+
   const [sourcesRes, zipRes] = await Promise.all([
-    supabase
-      .from('lead_sources')
-      .select('slug, total_synced_count, total_errors_count')
-      .eq('enabled', true)
-      .eq('kind', 'listings'),
+    sourcesQuery,
     supabase
       .from('austin_zip_codes')
       .select('zip_code')

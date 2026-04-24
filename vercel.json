@@ -4,10 +4,12 @@
   "buildCommand": "npm run build",
   "installCommand": "npm install",
   "crons": [
-    { "path": "/api/cron/discover", "schedule": "0 */2 * * *" },
-    { "path": "/api/cron/enrich", "schedule": "15 */2 * * *" },
-    { "path": "/api/cron/analyze", "schedule": "30 */2 * * *" },
-    { "path": "/api/cron/outreach", "schedule": "45 */2 * * *" }
+    { "path": "/api/cron/discover/rentcast", "schedule": "0 */2 * * *" },
+    { "path": "/api/cron/discover/realty_in_us", "schedule": "5 */2 * * *" },
+    { "path": "/api/cron/discover/realtor16", "schedule": "10 */2 * * *" },
+    { "path": "/api/cron/enrich", "schedule": "25 */2 * * *" },
+    { "path": "/api/cron/analyze", "schedule": "40 */2 * * *" },
+    { "path": "/api/cron/outreach", "schedule": "55 */2 * * *" }
   ],
   "headers": [
     {
