@@ -42,14 +42,26 @@ export function toGoogleMapsUrl(address: string | null | undefined): string | nu
   return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(address)}`
 }
 
-/** Travis CAD parcel record — only works when we've matched a tcad_prop_id. */
+/**
+ * Travis CAD parcel record. The old subdomain (propaccess.traviscad.org)
+ * went dead mid-2025; TCAD consolidated onto the main site's property search.
+ */
 export function toTcadUrl(propId: string | null | undefined): string | null {
   if (!propId) return null
-  return `https://propaccess.traviscad.org/clientdb/Property.aspx?prop_id=${encodeURIComponent(propId)}&cid=1&year=2026`
+  return `https://traviscad.org/propertysearch?prop_id=${encodeURIComponent(propId)}`
 }
 
-/** Redfin falls back to their address search when they have no exact match. */
+/**
+ * Redfin homes search by address. Redfin doesn't expose an address→listing
+ * deep link, so this goes to their homes page with the address as query.
+ */
 export function toRedfinUrl(address: string | null | undefined): string | null {
   if (!address) return null
-  return `https://www.redfin.com/stingray/do/query-location?location=${encodeURIComponent(address)}&v=2`
+  const slug = address
+    .replace(/,/g, '')
+    .replace(/[^\w\s]/g, '')
+    .trim()
+    .replace(/\s+/g, '-')
+  if (!slug) return null
+  return `https://www.redfin.com/homes/${slug}`
 }
