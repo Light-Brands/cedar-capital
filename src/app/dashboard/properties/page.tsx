@@ -147,7 +147,7 @@ export default function PropertiesPage() {
     const analysisFields = `
       offer_price, arv, arv_per_sqft, diff, rehab_total, selling_costs, total_cost,
       est_profit, monthly_payment, months_held, profit_with_finance, roi, mao,
-      wholesale_profit, deal_score, deal_score_numeric, comp_addresses, comp_prices,
+      wholesale_profit, deal_score, deal_score_numeric, comp_addresses, comp_prices, comp_distances,
       comp_avg_per_sqft, discount_pct, total_in, gross_profit, verified, badge
     `
     const propertyFields = `

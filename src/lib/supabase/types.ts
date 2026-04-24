@@ -230,6 +230,8 @@ export interface Analysis {
   verified: boolean | null
   badge: 'Perfect Fit' | 'Strong Match' | 'Could Work' | 'Needs a Reason' | 'Pass' | null
   comp_per_sqft: number[] | null
+  // Added by migration 006_comp_distances
+  comp_distances: number[] | null
   created_at: string
 }
 

@@ -16,6 +16,7 @@ export interface CompSale {
 export interface CompAnalysis {
   compAddresses: string[]
   compPrices: number[]
+  compDistances: number[]
   avgPricePerSqft: number
   medianPricePerSqft: number
   estimatedARV: number
@@ -101,6 +102,7 @@ export function analyzeComps(
     return {
       compAddresses: [],
       compPrices: [],
+      compDistances: [],
       avgPricePerSqft: 0,
       medianPricePerSqft: 0,
       estimatedARV: 0,
@@ -128,6 +130,7 @@ export function analyzeComps(
   return {
     compAddresses: usable.map(c => c.address),
     compPrices: usable.map(c => c.salePrice),
+    compDistances: usable.map(c => Math.round(c.distanceMiles * 100) / 100),
     avgPricePerSqft: Math.round(avgPricePerSqft * 100) / 100,
     medianPricePerSqft: Math.round(medianPricePerSqft * 100) / 100,
     estimatedARV,

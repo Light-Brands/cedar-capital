@@ -173,6 +173,7 @@ export default function AnalysisPanel({ analysis }: AnalysisPanelProps) {
             {analysis.comp_addresses.map((addr, i) => {
               const zillowUrl = toZillowUrl(addr)
               const mapsUrl = toGoogleMapsUrl(addr)
+              const distance = analysis.comp_distances?.[i]
               return (
                 <div key={i} className="flex items-center justify-between gap-3">
                   <div className="flex items-center gap-1.5 min-w-0 flex-1">
@@ -188,6 +189,11 @@ export default function AnalysisPanel({ analysis }: AnalysisPanelProps) {
                       </a>
                     ) : (
                       <span className="text-charcoal/70 truncate">{addr}</span>
+                    )}
+                    {distance != null && (
+                      <span className="flex-shrink-0 text-[10px] px-1 py-0.5 bg-stone-100 text-charcoal/70 border border-stone-300 rounded font-mono" title={`${distance.toFixed(2)} miles from subject property`}>
+                        {distance.toFixed(1)}mi
+                      </span>
                     )}
                     <span className="flex gap-1 flex-shrink-0">
                       {zillowUrl && (

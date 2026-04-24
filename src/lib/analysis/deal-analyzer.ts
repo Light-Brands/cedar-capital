@@ -75,6 +75,7 @@ export interface DealAnalysisResult {
   // Comp data
   compAddresses: string[]
   compPrices: number[]
+  compDistances: number[]
   compAvgPerSqft: number
 }
 
@@ -225,6 +226,7 @@ export function analyzeDeal(input: DealAnalysisInput): DealAnalysisResult {
     verified,
     compAddresses: compAnalysis?.compAddresses ?? [],
     compPrices: compAnalysis?.compPrices ?? [],
+    compDistances: compAnalysis?.compDistances ?? [],
     compAvgPerSqft: compAnalysis?.avgPricePerSqft ?? input.zipAvgPerSqft ?? 0,
   }
 }
@@ -281,6 +283,7 @@ export function toAnalysisInsert(
     score_factors: JSON.parse(JSON.stringify(result.score.factors)),
     comp_addresses: result.compAddresses,
     comp_prices: result.compPrices,
+    comp_distances: result.compDistances,
     comp_avg_per_sqft: result.compAvgPerSqft,
     // Kelly 36-col fields (added by migration 001)
     discount_pct: result.discountPct,

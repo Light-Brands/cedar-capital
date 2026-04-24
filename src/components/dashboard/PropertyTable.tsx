@@ -68,6 +68,7 @@ export interface FullPropertyRow {
     deal_score_numeric: number | null
     comp_addresses: string[] | null
     comp_prices: number[] | null
+    comp_distances: number[] | null
     comp_avg_per_sqft: number | null
     discount_pct: number | null
     total_in: number | null
@@ -415,7 +416,7 @@ const COLUMNS: ColumnDef[] = [
     const v = p.analyses?.[0]?.wholesale_profit
     return <span className={clsx('font-semibold', (v ?? 0) > 10000 ? 'text-emerald-700' : 'text-charcoal')}>{fmtUSD(v)}</span>
   }, csv: (p) => p.analyses?.[0]?.wholesale_profit ?? null },
-  // 30/31/32 — Comps 1-3 (address clickable → Zillow)
+  // 30/31/32 — Comps 1-3 (address clickable → Zillow, with distance tag)
   ...[0, 1, 2].map((i): ColumnDef => ({
     key: `comp_${i+1}`,
     header: `Comp ${i+1}`,
@@ -423,28 +424,42 @@ const COLUMNS: ColumnDef[] = [
     render: (p) => {
       const addr = p.analyses?.[0]?.comp_addresses?.[i]
       const price = p.analyses?.[0]?.comp_prices?.[i]
+      const distance = p.analyses?.[0]?.comp_distances?.[i]
       if (!addr) return <span className="text-charcoal/40">-</span>
       const zillowUrl = toZillowUrl(addr)
+      const distTag = distance != null ? ` · ${distance.toFixed(1)}mi` : ''
       const priceTag = price ? ` · ${fmtUSDCompact(price)}` : ''
+      const inner = (
+        <>
+          {addr}
+          <span className="text-charcoal/50">{distTag}</span>
+          <span className="font-semibold">{priceTag}</span>
+        </>
+      )
       return zillowUrl ? (
         <a
           href={zillowUrl}
           target="_blank"
           rel="noreferrer"
           className="text-xs text-cedar-green hover:underline"
-          title={`Open "${addr}" on Zillow`}
+          title={`Open "${addr}" on Zillow${distance != null ? ` — ${distance.toFixed(2)} mi from subject` : ''}`}
           onClick={(e) => e.stopPropagation()}
         >
-          {addr}{priceTag}
+          {inner}
         </a>
       ) : (
-        <span className="text-xs">{addr}{priceTag}</span>
+        <span className="text-xs">{inner}</span>
       )
     },
     csv: (p) => {
       const addr = p.analyses?.[0]?.comp_addresses?.[i]
       const price = p.analyses?.[0]?.comp_prices?.[i]
-      return addr ? `${addr}${price ? ` @ ${price}` : ''}` : ''
+      const distance = p.analyses?.[0]?.comp_distances?.[i]
+      if (!addr) return ''
+      const parts = [addr]
+      if (distance != null) parts.push(`${distance.toFixed(2)}mi`)
+      if (price) parts.push(`@ ${price}`)
+      return parts.join(' ')
     },
   })),
   // 33 — Verified?
