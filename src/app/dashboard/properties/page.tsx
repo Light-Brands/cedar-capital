@@ -35,27 +35,42 @@ export default function PropertiesPage() {
 
   const loadProperties = useCallback(async () => {
     setLoading(true)
+
+    // Badge filter needs an INNER join on analyses so we don't just slice the
+    // top-500-by-date and filter client-side (which hides actionable rows
+    // below the fold). Nested-table syntax: analyses!inner(...) + filter on
+    // analyses.badge.
+    const analysesSelect = filters.badge
+      ? `analyses!inner (
+          offer_price, arv, arv_per_sqft, diff, rehab_total, selling_costs, total_cost,
+          est_profit, monthly_payment, months_held, profit_with_finance, roi, mao,
+          wholesale_profit, deal_score, deal_score_numeric, comp_addresses, comp_prices,
+          comp_avg_per_sqft, discount_pct, total_in, gross_profit, verified, badge
+        )`
+      : `analyses (
+          offer_price, arv, arv_per_sqft, diff, rehab_total, selling_costs, total_cost,
+          est_profit, monthly_payment, months_held, profit_with_finance, roi, mao,
+          wholesale_profit, deal_score, deal_score_numeric, comp_addresses, comp_prices,
+          comp_avg_per_sqft, discount_pct, total_in, gross_profit, verified, badge
+        )`
+
     let query = supabase
       .from('properties')
       .select(`
         id, address, city, zip_code, beds, baths, sqft, asking_price, list_type,
         source, link, days_on_market, created_at, listing_status, review_status,
         agent_name, agent_phone, agent_email, special_features, notes,
-        analyses (
-          offer_price, arv, arv_per_sqft, diff, rehab_total, selling_costs, total_cost,
-          est_profit, monthly_payment, months_held, profit_with_finance, roi, mao,
-          wholesale_profit, deal_score, deal_score_numeric, comp_addresses, comp_prices,
-          comp_avg_per_sqft, discount_pct, total_in, gross_profit, verified
-        )
+        ${analysesSelect}
       `)
       .order('created_at', { ascending: sortOrder === 'asc' })
-      .limit(500)
+      .limit(filters.badge ? 2000 : 500)
 
     if (filters.zip) query = query.eq('zip_code', filters.zip)
     if (filters.listType) query = query.eq('list_type', filters.listType)
     if (filters.source) query = query.eq('source', filters.source)
     if (filters.review) query = query.eq('review_status', filters.review)
     if (filters.fsboOnly) query = query.eq('list_type', 'FSBO')
+    if (filters.badge) query = query.eq('analyses.badge', filters.badge)
 
     const { data, error } = await query
     if (error) {
@@ -67,25 +82,10 @@ export default function PropertiesPage() {
     // Post-UNIQUE-constraint, Supabase returns `analyses` as object-or-null
     // instead of array. Normalize to array shape so UI code (p.analyses?.[0])
     // keeps working uniformly for analyzed + unanalyzed rows.
-    let loaded = normalizeRelations(
+    const loaded = normalizeRelations(
       (data ?? []) as unknown as Record<string, unknown>[],
       ['analyses'],
     ) as unknown as FullPropertyRow[]
-
-    // Client-side filter by badge (requires analysis)
-    if (filters.badge) {
-      loaded = loaded.filter(r => {
-        const s = r.analyses?.[0]?.deal_score_numeric
-        if (s === null || s === undefined) return false
-        const badge =
-          s >= 90 ? 'Perfect Fit'
-          : s >= 75 ? 'Strong Match'
-          : s >= 60 ? 'Could Work'
-          : s >= 40 ? 'Needs a Reason'
-          : 'Pass'
-        return badge === filters.badge
-      })
-    }
 
     // Client-side sorting for analysis-derived columns
     const accessor = (r: FullPropertyRow, key: string): number => {
