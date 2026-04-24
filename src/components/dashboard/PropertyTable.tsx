@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { clsx } from 'clsx'
 import ScoreBadge from './ScoreBadge'
 import { scoreToBadge } from '@/lib/analysis/badge'
+import { classifyUnitType, isParcelMismatchLikely, isMultiUnit } from '@/lib/analysis/property-classifier'
 import { toCsv, downloadCsv, type CsvColumn } from '@/lib/csv'
 
 /**
@@ -22,8 +23,11 @@ export interface FullPropertyRow {
   beds: number | null
   baths: number | null
   sqft: number | null
+  lot_size: number | null
   asking_price: number | null
   list_type: string | null
+  property_type: string | null
+  market_value: number | null
   source: string | null
   link: string | null
   days_on_market: number | null
@@ -159,17 +163,69 @@ const COLUMNS: ColumnDef[] = [
     defaultVisible: true,
     sortable: true,
     width: '240px',
-    render: (p) => (
-      <div className="relative">
-        {isNew24h(p.created_at) && (
-          <span className="absolute -left-2 -top-1 text-[10px] bg-cedar-green text-cream px-1.5 py-0.5 rounded font-semibold">🆕</span>
-        )}
-        <Link href={`/dashboard/properties/${p.id}`} className="font-medium text-cedar-green hover:underline block">
-          {p.address}
-        </Link>
-      </div>
-    ),
+    render: (p) => {
+      const unitType = classifyUnitType({
+        property_type: p.property_type,
+        address: p.address,
+        lot_size: p.lot_size,
+        sqft: p.sqft,
+        beds: p.beds,
+      })
+      const mismatch = isParcelMismatchLikely(unitType, p.market_value, p.asking_price)
+      return (
+        <div className="relative">
+          {isNew24h(p.created_at) && (
+            <span className="absolute -left-2 -top-1 text-[10px] bg-cedar-green text-cream px-1.5 py-0.5 rounded font-semibold">🆕</span>
+          )}
+          <Link href={`/dashboard/properties/${p.id}`} className="font-medium text-cedar-green hover:underline block">
+            {p.address}
+          </Link>
+          <span className="flex items-center gap-1 mt-0.5 text-[10px]">
+            <span className={clsx(
+              'px-1 py-0.5 rounded font-medium border',
+              unitType === 'SFR' ? 'bg-cedar-green/10 text-cedar-green border-cedar-green/20' :
+              isMultiUnit(unitType) ? 'bg-capital-gold/15 text-capital-gold border-capital-gold/30' :
+              'bg-stone-100 text-stone-600 border-stone-300',
+            )}>
+              {unitType}
+            </span>
+            {mismatch && (
+              <span
+                title="TCAD market value looks like a whole-building parcel, not this unit — ARV may be inflated. Run Comps for a real sold-comp estimate."
+                className="px-1 py-0.5 rounded bg-amber-50 text-amber-800 border border-amber-300 font-medium"
+              >
+                ⚠ Parcel?
+              </span>
+            )}
+          </span>
+        </div>
+      )
+    },
     csv: (p) => p.address,
+  },
+  // Type column — adapter value with classifier fallback (hidden by default)
+  {
+    key: 'unit_type',
+    header: 'Type',
+    defaultVisible: false,
+    sortable: false,
+    render: (p) => {
+      const t = classifyUnitType({
+        property_type: p.property_type,
+        address: p.address,
+        lot_size: p.lot_size,
+        sqft: p.sqft,
+        beds: p.beds,
+      })
+      return <span className="text-xs text-charcoal/70">{t}</span>
+    },
+    csv: (p) => classifyUnitType({
+      property_type: p.property_type,
+      address: p.address,
+      lot_size: p.lot_size,
+      sqft: p.sqft,
+      beds: p.beds,
+    }),
   },
   // 2 — City / Zip
   { key: 'city_zip', header: 'City / Zip', defaultVisible: true, render: (p) => <span className="text-charcoal/70">{p.city}{p.zip_code ? ` ${p.zip_code}` : ''}</span>, csv: (p) => `${p.city} ${p.zip_code ?? ''}` },

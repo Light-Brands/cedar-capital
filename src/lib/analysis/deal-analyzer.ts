@@ -10,6 +10,7 @@ import { calculateFinance, calculateSellingCosts, calculateMAO, DEFAULT_FINANCE,
 import { scoreDeal, type ScoreResult } from './deal-scorer'
 import { type CompAnalysis } from './comps'
 import { scoreToBadge, type DealBadge } from './badge'
+import { classifyUnitType, isParcelMismatchLikely } from './property-classifier'
 
 export interface DealAnalysisInput {
   property: Property
@@ -94,21 +95,32 @@ export function analyzeDeal(input: DealAnalysisInput): DealAnalysisResult {
 
   // Step 1: Determine ARV
   // Fallback chain (best → worst signal):
-  //   explicit → real sold comps → TCAD market_value → zestimate
-  //   → tax-assessed × 1.1 → zip avg × sqft
-  // TCAD market_value is the appraisal district's own estimate of true market
-  // value — more grounded than zip-stats, less current than sold comps.
+  //   explicit → real sold comps → TCAD market_value (if not parcel-mismatch)
+  //   → zestimate → tax-assessed × 1.1 → zip avg × sqft
+  //
+  // Parcel-mismatch check protects condos/townhomes from TCAD's whole-building
+  // market_value. 200 Congress Ave #26C listed at $1.7M had a $7.56M TCAD
+  // market value (the whole tower), producing nonsense ARVs before this guard.
+  const unitType = classifyUnitType({
+    property_type: property.property_type,
+    address: property.address,
+    lot_size: property.lot_size,
+    sqft: property.sqft,
+    beds: property.beds,
+  })
+  const parcelMismatch = isParcelMismatchLikely(unitType, property.market_value, property.asking_price)
+
   let arv = input.arv ?? 0
   if (!arv && compAnalysis?.estimatedARV) {
     arv = compAnalysis.estimatedARV
   }
-  if (!arv && property.market_value && property.market_value > 0) {
+  if (!arv && property.market_value && property.market_value > 0 && !parcelMismatch) {
     arv = property.market_value
   }
   if (!arv && property.zestimate) {
     arv = property.zestimate
   }
-  if (!arv && property.tax_assessed_value) {
+  if (!arv && property.tax_assessed_value && !parcelMismatch) {
     arv = Math.round(property.tax_assessed_value * 1.1)
   }
   if (!arv && input.zipAvgPerSqft && sqft > 0) {

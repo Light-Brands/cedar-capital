@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { supabase } from '@/lib/supabase/client'
 import { normalizeRelations } from '@/lib/supabase/normalize'
+import { classifyUnitType, isParcelMismatchLikely } from '@/lib/analysis/property-classifier'
 import PropertyTable, {
   type FullPropertyRow,
   type EnrichmentResult,
@@ -11,6 +12,7 @@ import RefreshButton from '@/components/dashboard/RefreshButton'
 
 type BadgeFilter = '' | 'Perfect Fit' | 'Strong Match' | 'Could Work' | 'Needs a Reason' | 'Pass'
 type ReviewFilter = '' | 'New' | 'Reviewed' | 'Contacted' | 'Dead'
+type UnitFilter = '' | 'SFR' | 'Condo' | 'Townhouse' | 'Duplex' | 'Multi' | 'Land'
 
 export default function PropertiesPage() {
   const [rows, setRows] = useState<FullPropertyRow[]>([])
@@ -22,6 +24,8 @@ export default function PropertiesPage() {
     listType: '',
     source: '',
     fsboOnly: false,
+    unitType: '' as UnitFilter,
+    hideMismatch: false,
   })
   const [zipInput, setZipInput] = useState('')
   const [sortColumn, setSortColumn] = useState<string>('date')
@@ -60,9 +64,10 @@ export default function PropertiesPage() {
     let query = supabase
       .from('properties')
       .select(`
-        id, address, city, zip_code, beds, baths, sqft, asking_price, list_type,
-        source, link, days_on_market, created_at, listing_status, review_status,
-        agent_name, agent_phone, agent_email, special_features, notes,
+        id, address, city, zip_code, beds, baths, sqft, lot_size, asking_price, list_type,
+        property_type, market_value, source, link, days_on_market, created_at,
+        listing_status, review_status, agent_name, agent_phone, agent_email,
+        special_features, notes,
         ${analysesSelect}
       `)
       .order('created_at', { ascending: sortOrder === 'asc' })
@@ -85,10 +90,36 @@ export default function PropertiesPage() {
     // Post-UNIQUE-constraint, Supabase returns `analyses` as object-or-null
     // instead of array. Normalize to array shape so UI code (p.analyses?.[0])
     // keeps working uniformly for analyzed + unanalyzed rows.
-    const loaded = normalizeRelations(
+    let loaded = normalizeRelations(
       (data ?? []) as unknown as Record<string, unknown>[],
       ['analyses'],
     ) as unknown as FullPropertyRow[]
+
+    // Client-side filters for type classifier (derived from multiple columns)
+    if (filters.unitType) {
+      loaded = loaded.filter(r => {
+        const t = classifyUnitType({
+          property_type: r.property_type,
+          address: r.address,
+          lot_size: r.lot_size,
+          sqft: r.sqft,
+          beds: r.beds,
+        })
+        return t === filters.unitType
+      })
+    }
+    if (filters.hideMismatch) {
+      loaded = loaded.filter(r => {
+        const t = classifyUnitType({
+          property_type: r.property_type,
+          address: r.address,
+          lot_size: r.lot_size,
+          sqft: r.sqft,
+          beds: r.beds,
+        })
+        return !isParcelMismatchLikely(t, r.market_value, r.asking_price)
+      })
+    }
 
     // Client-side sorting for analysis-derived columns
     const accessor = (r: FullPropertyRow, key: string): number => {
@@ -287,6 +318,20 @@ export default function PropertiesPage() {
           <option value="REO">REO</option>
         </select>
 
+        <select
+          value={filters.unitType}
+          onChange={e => setFilters(prev => ({ ...prev, unitType: e.target.value as UnitFilter }))}
+          className="input w-auto"
+        >
+          <option value="">All Unit Types</option>
+          <option value="SFR">SFR</option>
+          <option value="Condo">Condo</option>
+          <option value="Townhouse">Townhouse</option>
+          <option value="Duplex">Duplex</option>
+          <option value="Multi">Multi-family</option>
+          <option value="Land">Land</option>
+        </select>
+
         <label className="flex items-center gap-1.5 text-sm text-charcoal cursor-pointer select-none">
           <input
             type="checkbox"
@@ -297,10 +342,23 @@ export default function PropertiesPage() {
           FSBO only
         </label>
 
+        <label
+          className="flex items-center gap-1.5 text-sm text-charcoal cursor-pointer select-none"
+          title="Hide rows where TCAD market_value looks like a whole-building parcel, not the unit"
+        >
+          <input
+            type="checkbox"
+            checked={filters.hideMismatch}
+            onChange={e => setFilters(prev => ({ ...prev, hideMismatch: e.target.checked }))}
+            className="accent-amber-500"
+          />
+          Hide parcel-mismatch
+        </label>
+
         {activeFilters > 0 && (
           <button
             onClick={() => {
-              setFilters({ badge: '', review: '', zip: '', listType: '', source: '', fsboOnly: false })
+              setFilters({ badge: '', review: '', zip: '', listType: '', source: '', fsboOnly: false, unitType: '', hideMismatch: false })
               setZipInput('')
             }}
             className="text-sm text-charcoal/60 hover:text-charcoal"
