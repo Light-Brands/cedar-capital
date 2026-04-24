@@ -126,10 +126,9 @@ export default function PropertiesPage() {
   const loadProperties = useCallback(async () => {
     setLoading(true)
 
-    // Map UI sort keys to the actual `analyses` column names Supabase can
-    // order on. Any key present here triggers server-side sort on the
-    // joined table — so the user sees the actual top-scored rows across
-    // the whole 12k+ feed, not just the top-500 newest.
+    // Map UI sort keys → actual `analyses` column names. Any key in this map
+    // triggers the "flipped" query below: we query `analyses` as root + nest
+    // properties, so ordering on these cols actually ranks parent rows.
     const analysisSortColumns: Record<string, string> = {
       deal_score: 'deal_score_numeric',
       roi: 'roi',
@@ -145,75 +144,104 @@ export default function PropertiesPage() {
     }
     const sortsOnAnalysis = sortColumn in analysisSortColumns
 
-    // INNER join when we need to filter or sort on analyses — excludes rows
-    // without an analysis (they'd sort as NULL and crowd the top anyway).
-    const needsInner = Boolean(filters.badge || sortsOnAnalysis)
-    const analysesJoin = needsInner ? 'analyses!inner' : 'analyses'
-    const analysesSelect = `${analysesJoin} (
+    const analysisFields = `
       offer_price, arv, arv_per_sqft, diff, rehab_total, selling_costs, total_cost,
       est_profit, monthly_payment, months_held, profit_with_finance, roi, mao,
       wholesale_profit, deal_score, deal_score_numeric, comp_addresses, comp_prices,
       comp_avg_per_sqft, discount_pct, total_in, gross_profit, verified, badge
-    )`
+    `
+    const propertyFields = `
+      id, tcad_prop_id, address, city, zip_code, beds, baths, sqft, lot_size,
+      asking_price, list_type, property_type, market_value, source, link,
+      days_on_market, created_at, listing_status, review_status,
+      agent_name, agent_phone, agent_email,
+      owner_name, owner_mailing_address, is_absentee, has_homestead_exemption,
+      distress_signal, special_features, notes
+    `
 
-    let query = supabase
-      .from('properties')
-      .select(`
-        id, tcad_prop_id, address, city, zip_code, beds, baths, sqft, lot_size,
-        asking_price, list_type, property_type, market_value, source, link,
-        days_on_market, created_at, listing_status, review_status,
-        agent_name, agent_phone, agent_email,
-        owner_name, owner_mailing_address, is_absentee, has_homestead_exemption,
-        distress_signal, special_features, notes,
-        ${analysesSelect}
-      `)
-      .limit(needsInner ? 2000 : 500)
+    let loaded: FullPropertyRow[] = []
 
-    // Primary sort: analysis-derived field (server side) if applicable,
-    // otherwise created_at. Secondary fallback to created_at desc keeps ties stable.
     if (sortsOnAnalysis) {
-      query = query.order(analysisSortColumns[sortColumn], {
-        referencedTable: 'analyses',
-        ascending: sortOrder === 'asc',
-        nullsFirst: false,
-      })
-    } else if (sortColumn === 'asking_price' || sortColumn === 'sqft' || sortColumn === 'beds' || sortColumn === 'baths' || sortColumn === 'dom') {
-      const colMap: Record<string, string> = {
-        asking_price: 'asking_price', sqft: 'sqft', beds: 'beds', baths: 'baths', dom: 'days_on_market',
+      // Flipped query: analyses is root (so we can actually order by its
+      // columns), with properties nested via !inner. PostgREST can only sort
+      // parent rows by root-table columns, so this flip is the one way to
+      // truly rank properties by score / ROI / MAO / etc.
+      let q = supabase
+        .from('analyses')
+        .select(`${analysisFields}, properties!inner (${propertyFields})`)
+        .order(analysisSortColumns[sortColumn], { ascending: sortOrder === 'asc', nullsFirst: false })
+        .limit(2000)
+
+      if (filters.badge) q = q.eq('badge', filters.badge)
+      if (filters.zip) q = q.eq('properties.zip_code', filters.zip)
+      if (filters.listType) q = q.eq('properties.list_type', filters.listType)
+      if (filters.source) q = q.eq('properties.source', filters.source)
+      if (filters.review) q = q.eq('properties.review_status', filters.review)
+      if (filters.fsboOnly) q = q.eq('properties.list_type', 'FSBO')
+      if (filters.absenteeOnly) q = q.eq('properties.is_absentee', true)
+      if (filters.hasDistress) q = q.not('properties.distress_signal', 'is', null)
+
+      const { data, error } = await q
+      if (error) {
+        console.error('analyses load failed:', error)
+        setLoading(false)
+        return
       }
-      query = query.order(colMap[sortColumn], { ascending: sortOrder === 'asc', nullsFirst: false })
-    } else if (sortColumn === 'list_type' || sortColumn === 'source') {
-      query = query.order(sortColumn, { ascending: sortOrder === 'asc' })
-    } else if (sortColumn === 'address') {
-      query = query.order('address', { ascending: sortOrder === 'asc' })
+
+      // Flip the shape: each row is {...analysis_fields, properties: {...}}.
+      // Transform to FullPropertyRow: {...property_fields, analyses: [analysis]}
+      loaded = (data ?? []).map(r => {
+        const row = r as Record<string, unknown>
+        const { properties: prop, ...analysis } = row
+        return {
+          ...(prop as Record<string, unknown>),
+          analyses: [analysis],
+        }
+      }) as unknown as FullPropertyRow[]
     } else {
-      // 'date' and anything else → created_at
-      query = query.order('created_at', { ascending: sortOrder === 'asc' })
+      // Property-first query (default shape) — sort on property-level fields
+      const needsInner = Boolean(filters.badge)
+      const analysesJoin = needsInner ? 'analyses!inner' : 'analyses'
+      let query = supabase
+        .from('properties')
+        .select(`${propertyFields}, ${analysesJoin} (${analysisFields})`)
+        .limit(needsInner ? 2000 : 500)
+
+      if (sortColumn === 'asking_price' || sortColumn === 'sqft' || sortColumn === 'beds' || sortColumn === 'baths' || sortColumn === 'dom') {
+        const colMap: Record<string, string> = {
+          asking_price: 'asking_price', sqft: 'sqft', beds: 'beds', baths: 'baths', dom: 'days_on_market',
+        }
+        query = query.order(colMap[sortColumn], { ascending: sortOrder === 'asc', nullsFirst: false })
+      } else if (sortColumn === 'list_type' || sortColumn === 'source') {
+        query = query.order(sortColumn, { ascending: sortOrder === 'asc' })
+      } else if (sortColumn === 'address') {
+        query = query.order('address', { ascending: sortOrder === 'asc' })
+      } else {
+        query = query.order('created_at', { ascending: sortOrder === 'asc' })
+      }
+
+      if (filters.zip) query = query.eq('zip_code', filters.zip)
+      if (filters.listType) query = query.eq('list_type', filters.listType)
+      if (filters.source) query = query.eq('source', filters.source)
+      if (filters.review) query = query.eq('review_status', filters.review)
+      if (filters.fsboOnly) query = query.eq('list_type', 'FSBO')
+      if (filters.badge) query = query.eq('analyses.badge', filters.badge)
+      if (filters.absenteeOnly) query = query.eq('is_absentee', true)
+      if (filters.hasDistress) query = query.not('distress_signal', 'is', null)
+
+      const { data, error } = await query
+      if (error) {
+        console.error('properties load failed:', error)
+        setLoading(false)
+        return
+      }
+
+      // Post-UNIQUE-constraint, analyses comes back as object-or-null. Normalize.
+      loaded = normalizeRelations(
+        (data ?? []) as unknown as Record<string, unknown>[],
+        ['analyses'],
+      ) as unknown as FullPropertyRow[]
     }
-
-    if (filters.zip) query = query.eq('zip_code', filters.zip)
-    if (filters.listType) query = query.eq('list_type', filters.listType)
-    if (filters.source) query = query.eq('source', filters.source)
-    if (filters.review) query = query.eq('review_status', filters.review)
-    if (filters.fsboOnly) query = query.eq('list_type', 'FSBO')
-    if (filters.badge) query = query.eq('analyses.badge', filters.badge)
-    if (filters.absenteeOnly) query = query.eq('is_absentee', true)
-    if (filters.hasDistress) query = query.not('distress_signal', 'is', null)
-
-    const { data, error } = await query
-    if (error) {
-      console.error('properties load failed:', error)
-      setLoading(false)
-      return
-    }
-
-    // Post-UNIQUE-constraint, Supabase returns `analyses` as object-or-null
-    // instead of array. Normalize to array shape so UI code (p.analyses?.[0])
-    // keeps working uniformly for analyzed + unanalyzed rows.
-    let loaded = normalizeRelations(
-      (data ?? []) as unknown as Record<string, unknown>[],
-      ['analyses'],
-    ) as unknown as FullPropertyRow[]
 
     // Owner type filter (derived from owner_name — client-side classifier)
     if (filters.ownerType) {
