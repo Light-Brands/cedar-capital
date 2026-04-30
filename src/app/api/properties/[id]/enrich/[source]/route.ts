@@ -2,12 +2,14 @@
  * POST /api/properties/:id/enrich/:source
  *
  * Per-row manual enrichment, triggered by the buttons in PropertyTable.
- * :source is 'batchdata' (skip-trace / distress) or 'rentcast_avm' (real sold comps).
+ * :source is 'batchdata' (skip-trace / distress), 'rentcast_avm' (real sold comps),
+ * 'attom_detail' (ATTOM property detail + condition + absentee), or 'attom_avm'
+ * (ATTOM AVM + LTV + lendable equity + ARV recompute).
  *
  * Each variant:
  *   1. Pulls the property from DB.
- *   2. Hits the third-party API for this one property (~$0.05-0.15 per call).
- *   3. Persists enriched data (leads row for batchdata, analyses row for rentcast).
+ *   2. Hits the third-party API for this one property.
+ *   3. Persists enriched data + raw payload to a jsonb column for replay.
  *   4. Re-runs analyze for this property so badge/score/verified update inline.
  *   5. Returns a compact summary the UI flashes on the row.
  *
@@ -19,8 +21,11 @@ import { createServerClient } from '@/lib/supabase/client'
 import type { Property } from '@/lib/supabase/types'
 import * as batchdata from '@/lib/api/batchdata'
 import * as rentcast from '@/lib/api/rentcast'
+import * as attom from '@/lib/api/attom'
 import { progressiveFilterComps, analyzeComps, type CompSale } from '@/lib/analysis/comps'
 import { analyzeDeal, toAnalysisInsert } from '@/lib/analysis/deal-analyzer'
+import { calculateArv, type Condition } from '@/lib/analysis/arv-engine'
+import { classifyAll, extractDescription } from '@/lib/analysis/classify-description'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -51,9 +56,16 @@ export async function POST(
         return await enrichBatchData(supabase, property as Property)
       case 'rentcast_avm':
         return await enrichRentcastAvm(supabase, property as Property)
+      case 'attom_detail':
+      case 'attom_avm':
+        // Both ATTOM cases hit enrichByAddress() which fetches detail + AVM in
+        // a single call. The two sources are kept distinct in the UI so users
+        // can label which button they pressed, but the underlying work is the
+        // same — there's no benefit to splitting the calls.
+        return await enrichAttom(supabase, property as Property, source)
       default:
         return NextResponse.json(
-          { ok: false, error: `Unknown source "${source}". Expected batchdata or rentcast_avm.` },
+          { ok: false, error: `Unknown source "${source}". Expected batchdata, rentcast_avm, attom_detail, or attom_avm.` },
           { status: 400 },
         )
     }
@@ -262,6 +274,158 @@ async function enrichRentcastAvm(
     estimatedARV: compAnalysis.estimatedARV,
     avgPricePerSqft: compAnalysis.avgPricePerSqft,
     verified: compAnalysis.compCount >= 3,
+    reanalysis,
+  })
+}
+
+// ============================================================
+// ATTOM: detail + AVM + ARV recompute + description re-classify
+// ============================================================
+
+async function enrichAttom(
+  supabase: ReturnType<typeof createServerClient>,
+  property: Property,
+  uiSource: 'attom_detail' | 'attom_avm',
+) {
+  if (!process.env.ATTOM_API_KEY) {
+    return NextResponse.json({
+      ok: false,
+      needsConfig: true,
+      error: 'ATTOM_API_KEY not configured. Set it in Vercel env and redeploy.',
+    })
+  }
+
+  const streetOnly = property.address.split(',')[0].trim()
+  const enrichment = await attom.enrichByAddress(streetOnly, property.zip_code ?? '')
+
+  if (!enrichment || (enrichment.endpointsHit.length === 0)) {
+    await supabase
+      .from('properties')
+      .update({ last_enriched_at: new Date().toISOString() })
+      .eq('id', property.id)
+    return NextResponse.json({
+      ok: false,
+      message: enrichment?.endpointsSkipped[0]?.reason ?? 'ATTOM returned no data for this address',
+      skipped: enrichment?.endpointsSkipped ?? [],
+    })
+  }
+
+  // Re-classify combining structural signals (always available — realtor16
+  // description.type, rentcast propertyType, foreclosure flags, distress) with
+  // freeform text if any was captured. Mirrors the SQL backfill logic from
+  // migration 006 so runtime + batch results stay consistent.
+  const propRaw = property as unknown as Record<string, unknown>
+  const existingDescription = (propRaw.description as string | null) ?? null
+  const { text: extractedText, source: extractedSource } = existingDescription
+    ? { text: null, source: null }
+    : extractDescription(property.raw_data)
+  const description = existingDescription ?? extractedText
+
+  const classification = classifyAll({
+    description,
+    rawData: property.raw_data,
+    distressSignal: property.distress_signal,
+  })
+
+  const descriptionUpdate: Record<string, unknown> = {
+    description_categories: classification.categories,
+    description_flags: classification.flags,
+    description_classified_at: new Date().toISOString(),
+    ...(extractedText
+      ? { description: extractedText, description_source: extractedSource }
+      : {}),
+  }
+
+  // Recompute ARV using ATTOM AVM + condition + existing comp signals
+  // (compMedianPsf is loaded from the latest analyses row if present).
+  const { data: latestAnalysis } = await supabase
+    .from('analyses')
+    .select('comp_avg_per_sqft, comp_addresses')
+    .eq('property_id', property.id)
+    .maybeSingle()
+
+  const compAddrs = (latestAnalysis as { comp_addresses?: string[] | null } | null)?.comp_addresses ?? null
+  const arv = calculateArv({
+    attomAvmValue: enrichment.avmValue,
+    attomAvmLow: enrichment.avmLow,
+    attomAvmHigh: enrichment.avmHigh,
+    attomAvmScore: enrichment.avmScore,
+    attomCondition: (enrichment.condition?.toUpperCase() ?? null) as Condition,
+    rentcastCompPsf: (latestAnalysis as { comp_avg_per_sqft?: number } | null)?.comp_avg_per_sqft ?? null,
+    rentcastCompCount: compAddrs ? compAddrs.length : null,
+    subjectSqft: property.sqft ?? null,
+    tcadMarketValue: property.market_value ?? null,
+  })
+
+  // Persist ATTOM extracted fields + raw payloads + new ARV range
+  const { error: propErr } = await supabase
+    .from('properties')
+    .update({
+      attom_id: enrichment.attomId,
+      attom_data: enrichment.detail ? JSON.parse(JSON.stringify(enrichment.detail)) : null,
+      attom_avm: enrichment.avm ? JSON.parse(JSON.stringify(enrichment.avm)) : null,
+      attom_avm_value: enrichment.avmValue,
+      attom_avm_low: enrichment.avmLow,
+      attom_avm_high: enrichment.avmHigh,
+      attom_avm_score: enrichment.avmScore,
+      attom_ltv: enrichment.ltv,
+      attom_lendable_equity: enrichment.lendableEquity,
+      attom_total_loan_balance: enrichment.totalLoanBalance,
+      attom_condition: enrichment.condition,
+      attom_quality: enrichment.quality,
+      attom_year_built_effective: enrichment.yearBuiltEffective,
+      attom_absentee_ind: enrichment.absenteeInd,
+      attom_last_synced_at: new Date().toISOString(),
+      arv_low: arv.arvLow,
+      arv_mid: arv.arvMid,
+      arv_high: arv.arvHigh,
+      arv_confidence: arv.confidence,
+      arv_signals: JSON.parse(JSON.stringify(arv.signals)),
+      arv_calculated_at: new Date().toISOString(),
+      last_enriched_at: new Date().toISOString(),
+      ...descriptionUpdate,
+    })
+    .eq('id', property.id)
+
+  if (propErr) {
+    console.error('[enrich/attom] property update failed:', propErr.message)
+    return NextResponse.json({ ok: false, error: propErr.message }, { status: 500 })
+  }
+
+  // Re-run analyze so the badge / score reflects the new ARV range mid-point
+  const reanalysis = await reanalyzeOne(supabase, property as Property)
+
+  return NextResponse.json({
+    ok: true,
+    source: uiSource,
+    attomId: enrichment.attomId,
+    endpointsHit: enrichment.endpointsHit,
+    endpointsSkipped: enrichment.endpointsSkipped,
+    avm: {
+      value: enrichment.avmValue,
+      low: enrichment.avmLow,
+      high: enrichment.avmHigh,
+      score: enrichment.avmScore,
+    },
+    homeEquity: {
+      ltv: enrichment.ltv,
+      lendableEquity: enrichment.lendableEquity,
+      totalLoanBalance: enrichment.totalLoanBalance,
+    },
+    building: {
+      condition: enrichment.condition,
+      quality: enrichment.quality,
+      yearBuiltEffective: enrichment.yearBuiltEffective,
+      absenteeInd: enrichment.absenteeInd,
+    },
+    arv: {
+      low: arv.arvLow,
+      mid: arv.arvMid,
+      high: arv.arvHigh,
+      confidence: arv.confidence,
+    },
+    description: descriptionUpdate.description ?? existingDescription ?? null,
+    descriptionCategories: descriptionUpdate.description_categories ?? null,
     reanalysis,
   })
 }
