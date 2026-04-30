@@ -270,6 +270,11 @@ export default function PropertyDetailPage() {
               equity signal; TCAD demoted to "Property Details" below. */}
           <AttomBlock property={property} />
 
+          {/* New ATTOM-driven blocks (added with migration 008) */}
+          <AttomOwnerMortgageBlock property={property} />
+          <RentalEstimateBlock property={property} />
+          <PermitsBlock property={property} />
+
           {/* Offer Range — prominent because this is the actionable number */}
           {offerTarget !== null && (
             <div className="bg-cedar-green/5 border border-cedar-green/20 rounded-card p-5">
@@ -498,6 +503,19 @@ type AttomFields = {
   arv_high?: number | null
   arv_confidence?: 'high' | 'medium' | 'low' | null
   arv_calculated_at?: string | null
+  // Migration 008 — owner + mortgage + rental + permits
+  attom_owner_name?: string | null
+  attom_owner_mailing?: string | null
+  attom_owner_type?: string | null
+  attom_mortgage_lender?: string | null
+  attom_mortgage_origination_date?: string | null
+  attom_mortgage_amount?: number | null
+  attom_rental_avm?: number | null
+  attom_rental_low?: number | null
+  attom_rental_high?: number | null
+  attom_permit_count?: number | null
+  attom_latest_permit_date?: string | null
+  attom_recent_permit_value?: number | null
 }
 
 const CATEGORY_LABEL: Record<string, string> = {
@@ -600,6 +618,124 @@ function ArvRangePanel({ property }: { property: FullProperty & AttomFields }) {
           range = ±{Math.round(((high - low) / mid) * 50)}% of mid
         </div>
       )}
+    </div>
+  )
+}
+
+function AttomOwnerMortgageBlock({ property }: { property: FullProperty & AttomFields }) {
+  if (!property.attom_owner_name && !property.attom_mortgage_lender) return null
+  const mortgageAge = property.attom_mortgage_origination_date
+    ? Math.floor((Date.now() - new Date(property.attom_mortgage_origination_date).getTime()) / (365.25 * 86400 * 1000))
+    : null
+  return (
+    <div className="bg-white border border-stone/30 rounded-card p-5">
+      <h3 className="font-heading font-semibold text-cedar-green mb-4">Owner &amp; Mortgage (ATTOM)</h3>
+      <div className="space-y-2 text-sm">
+        {property.attom_owner_name && <Row label="Owner" value={<span className="font-medium">{property.attom_owner_name}</span>} />}
+        {property.attom_owner_type && <Row label="Owner Type" value={property.attom_owner_type} />}
+        {property.attom_owner_mailing && (
+          <Row label="Mailing Address" value={<span className="text-xs">{property.attom_owner_mailing}</span>} />
+        )}
+        {property.attom_mortgage_lender && <Row label="Lender" value={property.attom_mortgage_lender} />}
+        {property.attom_mortgage_amount && <Row label="Original Loan" value={fmtUSD(property.attom_mortgage_amount)} />}
+        {property.attom_mortgage_origination_date && (
+          <Row
+            label="Mortgage Origination"
+            value={
+              <span>
+                {fmtDate(property.attom_mortgage_origination_date)}
+                {mortgageAge !== null && (
+                  <span className={clsx(
+                    'ml-2 text-[10px] px-1.5 py-0.5 rounded border font-semibold',
+                    mortgageAge >= 15 ? 'bg-emerald-50 text-emerald-800 border-emerald-300' :
+                    mortgageAge >= 10 ? 'bg-amber-50 text-amber-800 border-amber-300' :
+                    'bg-stone-100 text-stone-600 border-stone-300',
+                  )}>
+                    {mortgageAge}y old
+                  </span>
+                )}
+              </span>
+            }
+          />
+        )}
+      </div>
+    </div>
+  )
+}
+
+function RentalEstimateBlock({ property }: { property: FullProperty & AttomFields }) {
+  if (!property.attom_rental_avm) return null
+  const annual = property.attom_rental_avm * 12
+  const askingPrice = (property as { asking_price?: number | null }).asking_price ?? 0
+  const grossCapRate = askingPrice > 0 ? (annual / askingPrice) * 100 : null
+  const capRateTone =
+    grossCapRate === null ? '' :
+    grossCapRate >= 7 ? 'bg-emerald-50 text-emerald-800 border-emerald-300' :
+    grossCapRate >= 5 ? 'bg-amber-50 text-amber-800 border-amber-300' :
+    'bg-stone-100 text-stone-600 border-stone-300'
+  return (
+    <div className="bg-white border border-stone/30 rounded-card p-5">
+      <h3 className="font-heading font-semibold text-cedar-green mb-4">Rental Estimate (ATTOM)</h3>
+      <div className="space-y-2 text-sm">
+        <Row label="Estimated Rent" value={<span className="font-bold">{fmtUSD(property.attom_rental_avm)}/mo</span>} />
+        {(property.attom_rental_low || property.attom_rental_high) && (
+          <Row label="Range" value={`${fmtUSD(property.attom_rental_low)} – ${fmtUSD(property.attom_rental_high)}/mo`} />
+        )}
+        <Row label="Annual Gross" value={fmtUSD(annual)} />
+        {grossCapRate !== null && (
+          <Row
+            label="Gross Cap Rate"
+            value={
+              <span className={clsx('text-xs px-1.5 py-0.5 rounded border font-semibold', capRateTone)}>
+                {grossCapRate.toFixed(2)}%
+              </span>
+            }
+          />
+        )}
+      </div>
+    </div>
+  )
+}
+
+function PermitsBlock({ property }: { property: FullProperty & AttomFields }) {
+  if (property.attom_permit_count === null || property.attom_permit_count === undefined) return null
+  const yearsSince = property.attom_latest_permit_date
+    ? Math.floor((Date.now() - new Date(property.attom_latest_permit_date).getTime()) / (365.25 * 86400 * 1000))
+    : null
+  return (
+    <div className="bg-white border border-stone/30 rounded-card p-5">
+      <h3 className="font-heading font-semibold text-cedar-green mb-4">Building Permits (ATTOM)</h3>
+      <div className="space-y-2 text-sm">
+        <Row label="Total Permits" value={<span className="font-medium">{property.attom_permit_count}</span>} />
+        {property.attom_latest_permit_date && (
+          <Row
+            label="Last Permit"
+            value={
+              <span>
+                {fmtDate(property.attom_latest_permit_date)}
+                {yearsSince !== null && (
+                  <span className={clsx(
+                    'ml-2 text-[10px] px-1.5 py-0.5 rounded border font-semibold',
+                    yearsSince >= 20 ? 'bg-orange-50 text-orange-800 border-orange-300' :
+                    yearsSince >= 10 ? 'bg-amber-50 text-amber-800 border-amber-300' :
+                    'bg-emerald-50 text-emerald-800 border-emerald-300',
+                  )}>
+                    {yearsSince}y ago
+                  </span>
+                )}
+              </span>
+            }
+          />
+        )}
+        {property.attom_recent_permit_value && property.attom_recent_permit_value > 0 && (
+          <Row label="Recent Permit Value (5yr)" value={fmtUSD(property.attom_recent_permit_value)} />
+        )}
+        {property.attom_permit_count === 0 && (
+          <p className="text-xs text-orange-700 italic">
+            No permits on record — possible deferred maintenance or off-permit work.
+          </p>
+        )}
+      </div>
     </div>
   )
 }

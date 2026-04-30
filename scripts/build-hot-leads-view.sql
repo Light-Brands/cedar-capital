@@ -13,7 +13,8 @@
 --
 -- The hot_score is a 0-100 composite. Tune weights as we learn what closes.
 
-CREATE OR REPLACE VIEW hot_leads AS
+DROP VIEW IF EXISTS hot_leads;
+CREATE VIEW hot_leads AS
 SELECT
   p.id,
   p.address,
@@ -35,7 +36,35 @@ SELECT
   p.attom_condition,
   p.attom_absentee_ind,
   p.is_absentee AS tcad_is_absentee,
-  p.owner_name,
+  COALESCE(p.owner_name, p.attom_owner_name) AS owner_name,
+  p.attom_owner_name,
+  p.attom_owner_mailing,
+  p.attom_owner_type,
+  p.attom_mortgage_lender,
+  p.attom_mortgage_origination_date,
+  p.attom_mortgage_amount,
+  p.attom_rental_avm,
+  -- Annual cap rate (gross): rental × 12 / asking. For income-property scoring.
+  CASE
+    WHEN p.attom_rental_avm > 0 AND p.asking_price > 0
+    THEN ROUND(((p.attom_rental_avm * 12) / p.asking_price * 100)::numeric, 2)
+    ELSE NULL
+  END AS gross_cap_rate_pct,
+  p.attom_permit_count,
+  p.attom_latest_permit_date,
+  p.attom_recent_permit_value,
+  -- Years since last permit (high = deferred maintenance signal)
+  CASE
+    WHEN p.attom_latest_permit_date IS NOT NULL
+    THEN ROUND(((CURRENT_DATE - p.attom_latest_permit_date) / 365.25)::numeric, 1)
+    ELSE NULL
+  END AS years_since_permit,
+  -- Mortgage age — older mortgages = built-up equity, less remaining debt
+  CASE
+    WHEN p.attom_mortgage_origination_date IS NOT NULL
+    THEN EXTRACT(YEAR FROM age(p.attom_mortgage_origination_date))::int
+    ELSE NULL
+  END AS mortgage_age_years,
   p.distress_signal,
   p.description_categories,
   p.listing_status,
@@ -78,6 +107,29 @@ SELECT
       END
     -- Existing deal score bucket (0-15): proven engine signal
     + LEAST(15, COALESCE(a.deal_score_numeric, 0) / 7)
+    -- Old mortgage bonus (0-5): >15yr mortgage = lots of paid principal
+    + CASE
+        WHEN p.attom_mortgage_origination_date IS NOT NULL
+             AND EXTRACT(YEAR FROM age(p.attom_mortgage_origination_date)) >= 15 THEN 5
+        WHEN p.attom_mortgage_origination_date IS NOT NULL
+             AND EXTRACT(YEAR FROM age(p.attom_mortgage_origination_date)) >= 10 THEN 3
+        ELSE 0
+      END
+    -- No-permits-in-20yr bonus (0-5): deferred maintenance = rehab opportunity
+    + CASE
+        WHEN p.attom_permit_count IS NOT NULL AND p.attom_permit_count = 0 THEN 5
+        WHEN p.attom_latest_permit_date IS NOT NULL
+             AND p.attom_latest_permit_date < CURRENT_DATE - interval '20 years' THEN 5
+        ELSE 0
+      END
+    -- Cap-rate bonus for income properties (0-5): >7% gross cap is investor-attractive
+    + CASE
+        WHEN p.attom_rental_avm > 0 AND p.asking_price > 0
+             AND ((p.attom_rental_avm * 12) / p.asking_price) >= 0.07 THEN 5
+        WHEN p.attom_rental_avm > 0 AND p.asking_price > 0
+             AND ((p.attom_rental_avm * 12) / p.asking_price) >= 0.05 THEN 2
+        ELSE 0
+      END
   ) AS hot_score
 FROM properties p
 LEFT JOIN analyses a ON a.property_id = p.id

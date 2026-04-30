@@ -38,6 +38,14 @@ type HotLead = {
   deal_score_numeric: number | null
   badge: string | null
   attom_last_synced_at: string | null
+  // Migration 008 enrichments surfaced in view
+  attom_owner_name: string | null
+  attom_mortgage_lender: string | null
+  attom_rental_avm: number | null
+  gross_cap_rate_pct: number | null
+  attom_permit_count: number | null
+  years_since_permit: number | null
+  mortgage_age_years: number | null
 }
 
 type SortKey = 'hot_score' | 'deal_score_numeric' | 'attom_lendable_equity' | 'arv_mid'
@@ -161,6 +169,9 @@ export default function HotLeadsPage() {
                 <Th align="right">LTV</Th>
                 <Th align="right">Equity</Th>
                 <Th>Cond</Th>
+                <Th align="right">Rent</Th>
+                <Th align="right">Cap%</Th>
+                <Th align="right">Perms</Th>
                 <Th>Tags</Th>
                 <Th align="right">Score</Th>
               </tr>
@@ -208,6 +219,26 @@ export default function HotLeadsPage() {
                   </td>
                   <td className="px-3 py-2 text-right">{fmtUSD(l.attom_lendable_equity)}</td>
                   <td className="px-3 py-2 text-xs text-charcoal/60">{l.attom_condition ?? '—'}</td>
+                  <td className="px-3 py-2 text-right text-xs">
+                    {l.attom_rental_avm ? `${fmtUSD(l.attom_rental_avm)}/mo` : '—'}
+                  </td>
+                  <td className={clsx(
+                    'px-3 py-2 text-right text-xs',
+                    l.gross_cap_rate_pct === null ? 'text-charcoal/40' :
+                    l.gross_cap_rate_pct >= 7 ? 'text-emerald-700 font-semibold' :
+                    l.gross_cap_rate_pct >= 5 ? 'text-amber-700' :
+                    'text-charcoal/60',
+                  )}>
+                    {l.gross_cap_rate_pct !== null ? `${l.gross_cap_rate_pct}%` : '—'}
+                  </td>
+                  <td className={clsx(
+                    'px-3 py-2 text-right text-xs',
+                    l.attom_permit_count === 0 ? 'text-orange-700 font-semibold' :
+                    l.years_since_permit !== null && l.years_since_permit >= 20 ? 'text-orange-700' :
+                    'text-charcoal/60',
+                  )} title={l.years_since_permit !== null ? `last permit ${l.years_since_permit}y ago` : 'no permit data'}>
+                    {l.attom_permit_count ?? '—'}
+                  </td>
                   <td className="px-3 py-2">
                     <div className="flex flex-wrap gap-1">
                       {(l.description_categories ?? []).map((cat) => (
