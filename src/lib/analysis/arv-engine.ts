@@ -37,6 +37,9 @@ export interface ArvInput {
   attomCondition: Condition
   rentcastCompPsf: number | null         // median $/sqft from RentCast comps
   rentcastCompCount: number | null
+  /** Optional: median $/sqft from attom_sales (compute_attom_comps SQL fn) */
+  attomCompPsf?: number | null
+  attomCompCount?: number | null
   subjectSqft: number | null
   tcadMarketValue: number | null         // sanity floor only
 }
@@ -84,23 +87,30 @@ export function calculateArv(input: ArvInput): ArvResult {
     notes.push('no ATTOM AVM available')
   }
 
-  // RentCast comp $/sqft × subject sqft (already an ARV-style signal — comps
-  // are recently sold, in marketable condition; no condition lift needed)
+  // Comp $/sqft × subject sqft. Prefer ATTOM sales (broader pool, fresher data,
+  // self-pulled from /sale/snapshot) over RentCast (good but smaller dataset).
+  // Both are post-rehab realized signals — no condition lift needed.
   let compContribution: ArvSignals['compContribution'] = null
-  if (
-    input.rentcastCompPsf && input.rentcastCompPsf > 0 &&
-    input.subjectSqft && input.subjectSqft > 0
-  ) {
-    const compMid = input.rentcastCompPsf * input.subjectSqft
+  const attomPsf = input.attomCompPsf ?? null
+  const attomCount = input.attomCompCount ?? 0
+  const useAttomComps = attomPsf && attomPsf > 0 && attomCount >= 3
+  const useRentcastComps = input.rentcastCompPsf && input.rentcastCompPsf > 0
+  const chosenPsf = useAttomComps ? attomPsf : useRentcastComps ? input.rentcastCompPsf : null
+  const chosenCount = useAttomComps ? attomCount : (input.rentcastCompCount ?? 0)
+  const chosenSource = useAttomComps ? 'attom_sales' : useRentcastComps ? 'rentcast' : null
+
+  if (chosenPsf && input.subjectSqft && input.subjectSqft > 0) {
+    const compMid = chosenPsf * input.subjectSqft
     compContribution = {
       low: compMid * 0.92,
       mid: compMid,
       high: compMid * 1.08,
-      psf: input.rentcastCompPsf,
-      count: input.rentcastCompCount ?? 0,
+      psf: chosenPsf,
+      count: chosenCount,
     }
+    if (chosenSource) notes.push(`comps source: ${chosenSource}`)
   } else {
-    notes.push('no RentCast comp $/sqft available')
+    notes.push('no comp $/sqft available (neither ATTOM nor RentCast)')
   }
 
   // Reconcile signals: blend if both present, otherwise fall back to whichever exists

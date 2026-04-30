@@ -309,16 +309,46 @@ export async function enrichByAddress(address: string, zip: string): Promise<Att
 }
 
 /**
- * Probe the ATTOM key against all five product endpoints and report which are
- * entitled. Used by /api/sources/attom/test in the dashboard.
+ * Probe the ATTOM key against all known product endpoints and report which
+ * are entitled. Used by /api/sources/attom/test in the dashboard.
+ *
+ * Updated 2026-04-30 after deeper docs review revealed Cedar's trial key has
+ * access to 24 endpoints, not the 3 we initially probed. Comps + foreclosure
+ * remain locked; everything else is open.
  */
 export async function probeEntitlements(): Promise<AttomProbeResult> {
+  const ADDR = { address1: '4529 Winona Court', address2: 'Denver, CO' }
+  const ZIP = { postalcode: '78704', pagesize: '1' }
   const probes: { endpoint: string; path: string; params: Record<string, string> }[] = [
-    { endpoint: '/property/detail', path: '/property/detail', params: { address1: '4529 Winona Court', address2: 'Denver, CO' } },
-    { endpoint: '/property/snapshot', path: '/property/snapshot', params: { postalcode: '78704', pagesize: '1' } },
-    { endpoint: '/valuation/homeequity', path: '/valuation/homeequity', params: { address1: '4529 Winona Court', address2: 'Denver, CO' } },
-    { endpoint: '/property/preforeclosure', path: '/property/preforeclosure', params: { postalcode: '78704', pagesize: '1' } },
-    { endpoint: '/sale/comparables', path: '/sale/comparables', params: { address1: '4529 Winona Court', address2: 'Denver, CO', radius: '0.5', pagesize: '1' } },
+    // Property family
+    { endpoint: '/property/address', path: '/property/address', params: ZIP },
+    { endpoint: '/property/snapshot', path: '/property/snapshot', params: ZIP },
+    { endpoint: '/property/basicprofile', path: '/property/basicprofile', params: ADDR },
+    { endpoint: '/property/detail', path: '/property/detail', params: ADDR },
+    { endpoint: '/property/expandedprofile', path: '/property/expandedprofile', params: ADDR },
+    { endpoint: '/property/buildingpermits', path: '/property/buildingpermits', params: ADDR },
+    { endpoint: '/property/detailmortgage', path: '/property/detailmortgage', params: ADDR },
+    { endpoint: '/property/detailowner', path: '/property/detailowner', params: ADDR },
+    { endpoint: '/property/detailmortgageowner', path: '/property/detailmortgageowner', params: ADDR },
+    // Sale history
+    { endpoint: '/sale/snapshot', path: '/sale/snapshot', params: { ...ZIP, startsalesearchdate: '2024-01-01', endsalesearchdate: '2024-12-31' } },
+    { endpoint: '/sale/detail', path: '/sale/detail', params: ADDR },
+    { endpoint: '/saleshistory/expandedhistory', path: '/saleshistory/expandedhistory', params: ADDR },
+    { endpoint: '/saleshistory/detail', path: '/saleshistory/detail', params: ADDR },
+    // Assessment
+    { endpoint: '/assessment/snapshot', path: '/assessment/snapshot', params: ZIP },
+    { endpoint: '/assessment/detail', path: '/assessment/detail', params: ADDR },
+    { endpoint: '/assessmenthistory/detail', path: '/assessmenthistory/detail', params: ADDR },
+    // AVM
+    { endpoint: '/avm/detail', path: '/avm/detail', params: ADDR },
+    { endpoint: '/avm/snapshot', path: '/avm/snapshot', params: ZIP },
+    { endpoint: '/avmhistory/detail', path: '/avmhistory/detail', params: ADDR },
+    { endpoint: '/valuation/homeequity', path: '/valuation/homeequity', params: ADDR },
+    { endpoint: '/valuation/rentalavm', path: '/valuation/rentalavm', params: ADDR },
+    // Locked products (probe to confirm they remain locked over time)
+    { endpoint: '/sale/comparables', path: '/sale/comparables', params: { ...ADDR, radius: '0.5', pagesize: '1' } },
+    { endpoint: '/property/preforeclosure', path: '/property/preforeclosure', params: ZIP },
+    { endpoint: '/property/foreclosurehistory', path: '/property/foreclosurehistory', params: ADDR },
   ]
 
   const entitled: AttomProbeResult['entitled'] = []
@@ -336,6 +366,170 @@ export async function probeEntitlements(): Promise<AttomProbeResult> {
     ok: okCount > 0,
     entitled,
     message: `${okCount}/${probes.length} ATTOM products entitled on this key`,
+  }
+}
+
+// ============================================================
+// New endpoint adapters (added 2026-04-30 after entitlement re-probe)
+// ============================================================
+
+export interface AttomComprehensiveEnrichment extends AttomEnrichment {
+  // Owner data (from /property/detailowner or /property/detailmortgageowner)
+  ownerName: string | null
+  ownerMailingAddress: string | null
+  ownerType: string | null         // ATTOM owner1.type
+  // Mortgage data (from /property/detailmortgage)
+  mortgageLenderName: string | null
+  mortgageOriginationDate: string | null
+  mortgageAmount: number | null
+}
+
+/**
+ * Comprehensive enrichment via /property/detailmortgageowner — single call
+ * returns property detail + AVM + mortgage + owner. Replaces the two-call
+ * detail+homeequity pattern with a more complete one-call shape.
+ */
+export async function enrichComprehensive(address: string, zip: string): Promise<AttomComprehensiveEnrichment | null> {
+  const empty: AttomComprehensiveEnrichment = {
+    attomId: null, detail: null, avm: null,
+    avmValue: null, avmLow: null, avmHigh: null, avmScore: null,
+    ltv: null, lendableEquity: null, totalLoanBalance: null,
+    condition: null, quality: null, yearBuiltEffective: null, absenteeInd: null,
+    endpointsHit: [], endpointsSkipped: [],
+    ownerName: null, ownerMailingAddress: null, ownerType: null,
+    mortgageLenderName: null, mortgageOriginationDate: null, mortgageAmount: null,
+  }
+  if (!(await isAustinZip(zip))) {
+    empty.endpointsSkipped.push({ endpoint: 'all', reason: `zip ${zip} outside Austin allowlist` })
+    return empty
+  }
+  try {
+    const r = await attomFetchSafe('/property/detailmortgageowner', { address1: address, address2: zip })
+    if (r.unentitled) {
+      empty.endpointsSkipped.push({ endpoint: '/property/detailmortgageowner', reason: 'not entitled' })
+      return empty
+    }
+    const records = extractPropertyRecords(r.data)
+    if (records.length === 0) return empty
+    const rec = records[0]
+
+    empty.detail = rec
+    empty.attomId = pickAttomId(rec)
+
+    const building = (rec.building || {}) as Record<string, unknown>
+    const summary = (building.summary || {}) as Record<string, unknown>
+    const construction = (building.construction || {}) as Record<string, unknown>
+    const propSummary = (rec.summary || {}) as Record<string, unknown>
+    empty.condition = strOrNull(construction.condition)
+    empty.quality = strOrNull(summary.quality)
+    empty.yearBuiltEffective = numOrNull(summary.yearbuilteffective)
+    empty.absenteeInd = strOrNull(propSummary.absenteeInd)
+
+    const avm = (rec.avm || {}) as Record<string, unknown>
+    const amount = (avm.amount || {}) as Record<string, unknown>
+    empty.avmValue = numOrNull(amount.value)
+    empty.avmLow = numOrNull(amount.low)
+    empty.avmHigh = numOrNull(amount.high)
+    empty.avmScore = numOrNull(amount.scr)
+
+    // Owner
+    const owner = ((rec.owner as Record<string, unknown>) || {}) as Record<string, unknown>
+    const owner1 = (owner.owner1 || {}) as Record<string, unknown>
+    const mailing = (owner.mailingAddress || {}) as Record<string, unknown>
+    const fullName = strOrNull((owner1.fullName as string) ?? `${owner1.firstNameAndMi ?? ''} ${owner1.lastName ?? ''}`.trim())
+    empty.ownerName = fullName
+    empty.ownerMailingAddress = strOrNull(mailing.oneLine ?? mailing.line1)
+    empty.ownerType = strOrNull(owner1.type)
+
+    // Mortgage
+    const mortgage = ((rec.mortgage as Record<string, unknown>) || {}) as Record<string, unknown>
+    const m1 = (mortgage.FirstConcurrent || mortgage.firstConcurrent || mortgage[Object.keys(mortgage)[0] ?? ''] || {}) as Record<string, unknown>
+    const lender = (m1.lender || {}) as Record<string, unknown>
+    const mAmount = (m1.amount || {}) as Record<string, unknown>
+    empty.mortgageLenderName = strOrNull(lender.fullName ?? lender.lastName)
+    empty.mortgageOriginationDate = strOrNull(m1.dateOfRecording ?? m1.recordingDate)
+    empty.mortgageAmount = numOrNull(mAmount.loanAmount ?? mAmount.amount)
+
+    empty.endpointsHit.push('/property/detailmortgageowner')
+    return empty
+  } catch (err) {
+    console.error('[attom] /property/detailmortgageowner error:', err)
+    return empty
+  }
+}
+
+/**
+ * Get building permit history for a property. Recent permits = recent
+ * investment (less rehab needed). Long permit gap = deferred maintenance signal.
+ */
+export interface AttomPermit {
+  permitNumber: string | null
+  permitType: string | null
+  description: string | null
+  effectiveDate: string | null
+  amount: number | null
+  raw: Record<string, unknown>
+}
+
+export async function getBuildingPermits(address: string, zip: string): Promise<AttomPermit[]> {
+  if (!(await isAustinZip(zip))) return []
+  try {
+    const r = await attomFetchSafe('/property/buildingpermits', { address1: address, address2: zip })
+    if (r.unentitled) return []
+    const records = extractPropertyRecords(r.data)
+    if (records.length === 0) return []
+
+    const permits: AttomPermit[] = []
+    for (const rec of records) {
+      const buildingPermits = (rec.buildingPermits as Record<string, unknown>[] | undefined) ?? []
+      for (const p of buildingPermits) {
+        permits.push({
+          permitNumber: strOrNull((p as Record<string, unknown>).permitNumber),
+          permitType: strOrNull((p as Record<string, unknown>).type ?? (p as Record<string, unknown>).permitType),
+          description: strOrNull((p as Record<string, unknown>).description),
+          effectiveDate: strOrNull((p as Record<string, unknown>).effectiveDate ?? (p as Record<string, unknown>).date),
+          amount: numOrNull((p as Record<string, unknown>).jobValue ?? (p as Record<string, unknown>).amount),
+          raw: p as Record<string, unknown>,
+        })
+      }
+    }
+    return permits
+  } catch (err) {
+    console.error('[attom] /property/buildingpermits error:', err)
+    return []
+  }
+}
+
+/**
+ * Get rental AVM (estimated monthly rent) for cap-rate analysis.
+ * Particularly valuable for multi-unit deals where rent matters more than ARV.
+ */
+export async function getRentalAvm(address: string, zip: string): Promise<{
+  estimatedRent: number | null
+  rentLow: number | null
+  rentHigh: number | null
+  rentRange: { value: number; low: number; high: number } | null
+} | null> {
+  if (!(await isAustinZip(zip))) return null
+  try {
+    const r = await attomFetchSafe('/valuation/rentalavm', { address1: address, address2: zip })
+    if (r.unentitled) return null
+    const records = extractPropertyRecords(r.data)
+    if (records.length === 0) return null
+    const rec = records[0]
+    const rentavm = (rec.avm || rec.rentalavm || {}) as Record<string, unknown>
+    const amount = (rentavm.amount || {}) as Record<string, unknown>
+    return {
+      estimatedRent: numOrNull(amount.value),
+      rentLow: numOrNull(amount.low),
+      rentHigh: numOrNull(amount.high),
+      rentRange: amount.value && amount.low && amount.high
+        ? { value: Number(amount.value), low: Number(amount.low), high: Number(amount.high) }
+        : null,
+    }
+  } catch (err) {
+    console.error('[attom] /valuation/rentalavm error:', err)
+    return null
   }
 }
 

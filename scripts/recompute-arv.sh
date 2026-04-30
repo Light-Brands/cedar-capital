@@ -39,7 +39,23 @@ psql "$PGURL" -v ON_ERROR_STOP=1 -c "
 --   compLow/Mid/High  = comp_psf × sqft × {0.92, 1.00, 1.08}
 --   blended           = comps × 0.65 + ATTOM × 0.35 (when both present)
 --   tcad floor        = arv_low never below tcad market_value
-WITH inputs AS (
+WITH attom_comps AS (
+  -- Self-computed comps from attom_sales: median \$/sqft per (zip, sqft band).
+  -- Returns the median price-per-sqft of recent sales matching the subject's
+  -- zip + sqft within ±25%.
+  SELECT
+    p.id AS property_id,
+    PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY (s.sale_amount / NULLIF(s.sqft,0))) AS attom_comp_psf,
+    COUNT(*) AS attom_comp_count
+  FROM properties p
+  JOIN attom_sales s ON s.zip_code = p.zip_code
+  WHERE p.zip_code IN (SELECT zip_code FROM austin_zip_codes WHERE is_active=true)
+    AND p.sqft > 0
+    AND s.sqft BETWEEN p.sqft * 0.75 AND p.sqft * 1.25
+    AND s.sale_amount > 0
+    AND s.sale_date >= CURRENT_DATE - interval '12 months'
+  GROUP BY p.id
+), inputs AS (
   SELECT
     p.id,
     CASE UPPER(COALESCE(p.attom_condition, ''))
@@ -57,10 +73,13 @@ WITH inputs AS (
     p.attom_avm_score AS avm_score,
     p.sqft AS sqft,
     p.market_value AS tcad_mv,
-    a.comp_avg_per_sqft AS comp_psf,
-    COALESCE(array_length(a.comp_addresses, 1), 0) AS comp_count
+    -- Prefer ATTOM-derived comps (broader pool) when 3+ available, else RentCast
+    CASE WHEN ac.attom_comp_count >= 3 THEN ac.attom_comp_psf ELSE a.comp_avg_per_sqft END AS comp_psf,
+    CASE WHEN ac.attom_comp_count >= 3 THEN ac.attom_comp_count
+         ELSE COALESCE(array_length(a.comp_addresses, 1), 0) END AS comp_count
   FROM properties p
-  LEFT JOIN analyses a ON a.property_id = p.id
+  LEFT JOIN analyses a       ON a.property_id  = p.id
+  LEFT JOIN attom_comps ac   ON ac.property_id = p.id
   WHERE p.zip_code IN (SELECT zip_code FROM austin_zip_codes WHERE is_active=true)
 ), computed AS (
   SELECT
