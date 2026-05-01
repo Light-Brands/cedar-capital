@@ -134,6 +134,18 @@ function mapListing(record: Record<string, unknown>): DiscoveredProperty | null 
   const firstSeller = advertisers.find(a => (a as Record<string, unknown>)?.type === 'seller') as
     | Record<string, unknown> | undefined
 
+  // Hunt for freeform listing remarks across known realtor16 shapes. The
+  // /search/forsale endpoint typically does NOT include remarks (verified
+  // 2026-04-30 against 470 stored rows — only structured fields), but if the
+  // upstream response shape evolves OR the caller hits /property/{id}/details
+  // and merges, we want it captured. Cheap to look for, free if absent.
+  const descriptionText =
+    pickString(description.text) ??
+    pickString(record.public_remarks) ??
+    pickString(record.remarks) ??
+    pickString((record as Record<string, unknown>).description_text) ??
+    null
+
   return {
     address: [line, city, state, zip].join(', '),
     city,
@@ -160,8 +172,15 @@ function mapListing(record: Record<string, unknown>): DiscoveredProperty | null 
       _agent_name: firstSeller?.name ?? null,
       _listing_status: listingStatus,
       _brokerage: branding[0]?.name ?? null,
+      _description_text: descriptionText,
     },
   }
+}
+
+function pickString(v: unknown): string | null {
+  if (typeof v !== 'string') return null
+  const trimmed = v.trim()
+  return trimmed.length >= 10 ? trimmed : null
 }
 
 function mapPropertyType(raw?: string): string {

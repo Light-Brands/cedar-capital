@@ -80,6 +80,23 @@ export interface DealAnalysisResult {
 }
 
 /**
+ * ATTOM-condition → ARV-lift factor. Mirrors the ARV engine's table.
+ * POOR condition means the as-is AVM under-estimates post-rehab value; lift it.
+ */
+function condFactorFor(condition: string | null | undefined): number {
+  if (!condition) return 1.10
+  switch (condition.toUpperCase()) {
+    case 'EXCELLENT': return 1.00
+    case 'GOOD':      return 1.05
+    case 'AVERAGE':   return 1.12
+    case 'FAIR':      return 1.20
+    case 'POOR':      return 1.30
+    case 'UNSOUND':   return 1.40
+    default:          return 1.10
+  }
+}
+
+/**
  * Run full deal analysis on a property.
  * This is the core brain - every formula from the Cedar Capital spreadsheet.
  *
@@ -111,9 +128,32 @@ export function analyzeDeal(input: DealAnalysisInput): DealAnalysisResult {
   })
   const parcelMismatch = isParcelMismatchLikely(unitType, property.market_value, property.asking_price)
 
+  // ARV fallback chain (best → worst signal):
+  //   explicit override → real sold comps → blended ATTOM/comps mid (arv-engine)
+  //   → ATTOM AVM × condition factor → TCAD market_value (if not parcel-mismatch)
+  //   → zestimate → tax-assessed × 1.1 → zip avg × sqft
+  //
+  // Parcel-mismatch check protects condos/townhomes from TCAD's whole-building
+  // market_value. ATTOM AVM is per-unit so it's not subject to that pitfall.
+  const propAttom = property as unknown as {
+    arv_mid?: number | null
+    attom_avm_value?: number | null
+    attom_condition?: string | null
+    attom_lendable_equity?: number | null
+    attom_ltv?: number | null
+  }
   let arv = input.arv ?? 0
   if (!arv && compAnalysis?.estimatedARV) {
     arv = compAnalysis.estimatedARV
+  }
+  if (!arv && propAttom.arv_mid && propAttom.arv_mid > 0) {
+    // Multi-signal blend from arv-engine.ts (computed during ATTOM enrich)
+    arv = propAttom.arv_mid
+  }
+  if (!arv && propAttom.attom_avm_value && propAttom.attom_avm_value > 0) {
+    // ATTOM AVM as-is, lifted by condition (POOR/FAIR get a bigger ARV bump)
+    const condFactor = condFactorFor(propAttom.attom_condition)
+    arv = Math.round(propAttom.attom_avm_value * condFactor)
   }
   if (!arv && property.market_value && property.market_value > 0 && !parcelMismatch) {
     arv = property.market_value
@@ -168,14 +208,26 @@ export function analyzeDeal(input: DealAnalysisInput): DealAnalysisResult {
   const mao = calculateMAO(arv, rehab.total)                      // AI = (L * 75%) - V
   const wholesaleProfit = mao - offerPrice                         // AJ = AI - J
 
+  // Equity ratio for scoring: prefer ATTOM's lendable-equity-divided-by-AVM
+  // (real-time mortgage data), fall back to TCAD assessed - asking. ATTOM is
+  // the better signal because it reflects current loan balances, not just
+  // assessment-vs-list-price.
+  let estimatedEquity = 0
+  if (propAttom.attom_lendable_equity && propAttom.attom_avm_value && propAttom.attom_avm_value > 0) {
+    estimatedEquity = propAttom.attom_lendable_equity / propAttom.attom_avm_value
+  } else if (propAttom.attom_ltv !== null && propAttom.attom_ltv !== undefined) {
+    // 100% - LTV = equity %. LTV=0 means free-and-clear (max equity).
+    estimatedEquity = (100 - Math.min(100, propAttom.attom_ltv)) / 100
+  } else if (property.tax_assessed_value && property.asking_price) {
+    estimatedEquity = (property.tax_assessed_value - property.asking_price) / property.tax_assessed_value
+  }
+
   // Step 7: Score the deal
   const score = scoreDeal({
     roi,
     wholesaleSpread: wholesaleProfit,
     compCount: compAnalysis?.compCount ?? 0,
-    estimatedEquity: property.tax_assessed_value && property.asking_price
-      ? (property.tax_assessed_value - property.asking_price) / property.tax_assessed_value
-      : 0,
+    estimatedEquity,
     distressSignal: input.distressSignal ?? property.list_type ?? undefined,
     daysOnMarket: property.days_on_market ?? undefined,
     zipCode: property.zip_code ?? undefined,
