@@ -75,8 +75,12 @@ SELECT
   a.roi,
   a.mao,
   a.wholesale_profit,
-  -- Hot score: 0-100 composite, higher = hotter
-  LEAST(100,
+  -- Hot score: 0-100 composite, higher = hotter.
+  -- Multiplied by a deal-quality factor at the end so badge-rich but
+  -- economically broken deals (asking >> ARV) can't score high. A property
+  -- only scores well if BOTH the seller-motivation signals fire AND the
+  -- math works (ARV close to or above asking).
+  LEAST(100, ROUND((
     -- Distress bucket (0-30)
     CASE WHEN 'distressed' = ANY(p.description_categories) THEN 25 ELSE 0 END
     + CASE WHEN p.distress_signal IS NOT NULL THEN 5 ELSE 0 END
@@ -130,7 +134,24 @@ SELECT
              AND ((p.attom_rental_avm * 12) / p.asking_price) >= 0.05 THEN 2
         ELSE 0
       END
-  ) AS hot_score
+  ) * (
+    -- Deal-quality multiplier — fixes the 6107 Palm Cir problem where
+    -- badge-rich but economically broken deals (asking >> ARV) were
+    -- scoring high. A property only stays hot if BOTH motivation signals
+    -- fire AND the math works (ARV at or above asking).
+    -- Uses RentCast-derived ARV (analyses.arv) when available, falls back
+    -- to blended arv_mid, falls back to TCAD.
+    CASE
+      WHEN p.asking_price IS NULL OR p.asking_price <= 0 THEN 1.0
+      WHEN COALESCE(a.arv, p.arv_mid, p.market_value, 0) <= 0 THEN 1.0
+      WHEN COALESCE(a.arv, p.arv_mid, p.market_value) < p.asking_price * 0.85 THEN 0.10
+      WHEN COALESCE(a.arv, p.arv_mid, p.market_value) < p.asking_price * 0.95 THEN 0.40
+      WHEN COALESCE(a.arv, p.arv_mid, p.market_value) < p.asking_price * 1.05 THEN 0.80
+      WHEN COALESCE(a.arv, p.arv_mid, p.market_value) < p.asking_price * 1.20 THEN 1.00
+      WHEN COALESCE(a.arv, p.arv_mid, p.market_value) < p.asking_price * 1.50 THEN 1.15
+      ELSE 1.30
+    END
+  ))::int) AS hot_score
 FROM properties p
 LEFT JOIN analyses a ON a.property_id = p.id
 WHERE
