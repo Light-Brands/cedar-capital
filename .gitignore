@@ -38,3 +38,6 @@ next-env.d.ts
 .vscode/
 *.swp
 *.swo
+
+# QIE Intelligence Framework (symlink — not part of this project)
+_qie

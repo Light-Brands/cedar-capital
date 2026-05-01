@@ -17,6 +17,8 @@ import Link from 'next/link'
 import { clsx } from 'clsx'
 import { supabase } from '@/lib/supabase/client'
 import LeadPlayBadges from '@/components/dashboard/LeadPlayBadges'
+import ScoreBadge from '@/components/dashboard/ScoreBadge'
+import type { DealBadge } from '@/lib/analysis/badge'
 
 type HotLead = {
   id: string
@@ -37,7 +39,7 @@ type HotLead = {
   distress_signal: string | null
   hot_score: number | null
   deal_score_numeric: number | null
-  badge: string | null
+  badge: DealBadge | null
   attom_last_synced_at: string | null
   // Migration 008 enrichments surfaced in view
   attom_owner_name: string | null
@@ -105,8 +107,14 @@ export default function HotLeadsPage() {
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-heading font-bold text-cedar-green">Hot Leads</h1>
-        <p className="text-charcoal/60 mt-1 text-sm">
-          Austin properties ranked by motivated-seller composite. Distress + equity + condition + absenteeism + multi-unit.
+        <p className="text-charcoal/60 mt-1 text-sm max-w-3xl">
+          Two scores per row.{' '}
+          <strong className="text-cedar-green">Seller Motivation</strong> (0-100) measures
+          how likely the owner is to deal — REO ownership, free-and-clear or high equity,
+          absenteeism, distress flags, multi-unit, deferred permits.{' '}
+          <strong className="text-cedar-green">Profitability</strong> (0-100) measures whether
+          the deal math works at the asking price — ROI, wholesale spread, ARV vs asking,
+          comp confidence. Hot leads have both.
         </p>
       </div>
 
@@ -127,8 +135,8 @@ export default function HotLeadsPage() {
             onChange={(e) => setSortKey(e.target.value as SortKey)}
             className="border border-stone/30 rounded-lg px-2 py-1 bg-white"
           >
-            <option value="hot_score">Hot score</option>
-            <option value="deal_score_numeric">Deal score</option>
+            <option value="hot_score">Seller Motivation</option>
+            <option value="deal_score_numeric">Profitability</option>
             <option value="attom_lendable_equity">Lendable equity</option>
             <option value="arv_mid">ARV (mid)</option>
           </select>
@@ -161,7 +169,9 @@ export default function HotLeadsPage() {
           <table className="w-full text-sm">
             <thead className="bg-sand/30">
               <tr>
-                <Th>Hot</Th>
+                <Th title="Seller Motivation 0-100. How likely is the owner to deal? REO, equity, absenteeism, distress, multi-unit, deferred permits.">
+                  Motivation
+                </Th>
                 <Th>Address</Th>
                 <Th>Beds/Baths/Sqft</Th>
                 <Th align="right">Asking</Th>
@@ -174,7 +184,9 @@ export default function HotLeadsPage() {
                 <Th align="right">Cap%</Th>
                 <Th align="right">Perms</Th>
                 <Th>Tags</Th>
-                <Th align="right">Score</Th>
+                <Th align="right" title="Profitability 0-100. Does the deal math work? ROI, wholesale spread, ARV vs asking, comp confidence.">
+                  Profitability
+                </Th>
               </tr>
             </thead>
             <tbody>
@@ -243,7 +255,11 @@ export default function HotLeadsPage() {
                   <td className="px-3 py-2">
                     <LeadPlayBadges property={l as Parameters<typeof LeadPlayBadges>[0]['property']} max={3} />
                   </td>
-                  <td className="px-3 py-2 text-right text-charcoal/70">{l.deal_score_numeric ?? '—'}</td>
+                  <td className="px-3 py-2">
+                    <div className="flex items-center justify-end gap-1.5">
+                      <ScoreBadge badge={l.badge} score={l.deal_score_numeric} size="sm" />
+                    </div>
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -274,9 +290,9 @@ function Stat({ label, value, tone = 'green' }: { label: string; value: string; 
   )
 }
 
-function Th({ children, align = 'left' }: { children: React.ReactNode; align?: 'left' | 'right' }) {
+function Th({ children, align = 'left', title }: { children: React.ReactNode; align?: 'left' | 'right'; title?: string }) {
   return (
-    <th className={clsx(
+    <th title={title} className={clsx(
       'px-3 py-2 font-medium text-charcoal/60 text-xs uppercase tracking-wide',
       align === 'right' ? 'text-right' : 'text-left',
     )}>
