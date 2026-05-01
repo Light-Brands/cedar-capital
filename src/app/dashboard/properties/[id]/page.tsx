@@ -13,6 +13,7 @@ import { classifyUnitType, isParcelMismatchLikely, isMultiUnit } from '@/lib/ana
 import { classifyOwner } from '@/lib/analysis/owner-classifier'
 import { toZillowUrl, toRealtorUrl, toGoogleMapsUrl, toTcadUrl } from '@/lib/external-links'
 import type { DealBadge } from '@/lib/analysis/badge'
+import LeadPlayBadges from '@/components/dashboard/LeadPlayBadges'
 
 interface FullProperty extends Property {
   analyses: Analysis[]
@@ -194,6 +195,10 @@ export default function PropertyDetailPage() {
             {property.city}, {property.state} {property.zip_code}
             {property.county && ` · ${property.county} County`}
           </p>
+          {/* Lead Plays at the top — operator instantly sees which archetype(s) apply */}
+          <div className="mt-2">
+            <LeadPlayBadges property={property} />
+          </div>
           <div className="flex items-center gap-4 mt-2 text-sm text-charcoal/70 flex-wrap">
             {property.beds != null && <span>{property.beds} bd</span>}
             {property.baths != null && <span>{property.baths} ba</span>}

@@ -16,6 +16,7 @@ import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { clsx } from 'clsx'
 import { supabase } from '@/lib/supabase/client'
+import LeadPlayBadges from '@/components/dashboard/LeadPlayBadges'
 
 type HotLead = {
   id: string
@@ -240,24 +241,7 @@ export default function HotLeadsPage() {
                     {l.attom_permit_count ?? '—'}
                   </td>
                   <td className="px-3 py-2">
-                    <div className="flex flex-wrap gap-1">
-                      {(l.description_categories ?? []).map((cat) => (
-                        <span
-                          key={cat}
-                          className={clsx(
-                            'text-[9px] px-1 py-0.5 rounded border font-semibold uppercase',
-                            CATEGORY_TONE[cat] ?? 'bg-stone-100 text-stone-700 border-stone-300',
-                          )}
-                        >
-                          {cat.replace('_', ' ')}
-                        </span>
-                      ))}
-                      {l.attom_absentee_ind === 'ABSENTEE' && (
-                        <span className="text-[9px] px-1 py-0.5 rounded border font-semibold uppercase bg-amber-50 text-amber-800 border-amber-300">
-                          ABSENT
-                        </span>
-                      )}
-                    </div>
+                    <LeadPlayBadges property={l as Parameters<typeof LeadPlayBadges>[0]['property']} max={3} />
                   </td>
                   <td className="px-3 py-2 text-right text-charcoal/70">{l.deal_score_numeric ?? '—'}</td>
                 </tr>

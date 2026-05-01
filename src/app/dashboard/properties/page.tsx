@@ -165,6 +165,9 @@ export default function PropertiesPage() {
         agent_name, agent_phone, agent_email,
         owner_name, owner_mailing_address, is_absentee, has_homestead_exemption,
         distress_signal, special_features, notes,
+        attom_id, attom_owner_name, attom_mortgage_amount, attom_mortgage_origination_date,
+        attom_absentee_ind, description_categories, arv_mid, arv_confidence,
+        attom_avm_value, attom_ltv, attom_lendable_equity, attom_condition,
         ${analysesSelect}
       `)
       .limit(needsInner ? 2000 : 500)

@@ -4,9 +4,11 @@ import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { clsx } from 'clsx'
 import ScoreBadge from './ScoreBadge'
+import LeadPlayBadges from './LeadPlayBadges'
 import { scoreToBadge } from '@/lib/analysis/badge'
 import { classifyUnitType, isParcelMismatchLikely, isMultiUnit } from '@/lib/analysis/property-classifier'
 import { classifyOwner } from '@/lib/analysis/owner-classifier'
+import { classifyLeadPlays, LEAD_PLAY_LABEL, type LeadPlay } from '@/lib/lead-plays'
 import { toZillowUrl, toRealtorUrl, toGoogleMapsUrl, toTcadUrl } from '@/lib/external-links'
 import { toCsv, downloadCsv, type CsvColumn } from '@/lib/csv'
 import { useLocalStorage } from '@/lib/use-local-storage'
@@ -48,6 +50,19 @@ export interface FullPropertyRow {
   distress_signal: string | null
   special_features: string[] | null
   notes: string | null
+  // Migration 006/008 — ATTOM enrichment fields surfaced for badge classification
+  attom_id?: string | null
+  attom_owner_name?: string | null
+  attom_mortgage_amount?: number | null
+  attom_mortgage_origination_date?: string | null
+  attom_absentee_ind?: string | null
+  attom_avm_value?: number | null
+  attom_ltv?: number | null
+  attom_lendable_equity?: number | null
+  attom_condition?: string | null
+  description_categories?: string[] | null
+  arv_mid?: number | null
+  arv_confidence?: 'high' | 'medium' | 'low' | null
   // analyses (array because of the Supabase relation; we take [0])
   analyses: Array<{
     offer_price: number | null
@@ -170,6 +185,18 @@ function listSqft(p: FullPropertyRow): number | null {
 }
 
 const COLUMNS: ColumnDef[] = [
+  // 0 — Lead Plays (compact badge column, primary play)
+  {
+    key: 'lead_plays',
+    header: 'Plays',
+    defaultVisible: true,
+    width: '110px',
+    render: (p) => <LeadPlayBadges property={p} max={2} />,
+    csv: (p) => {
+      const { plays } = classifyLeadPlays(p)
+      return plays.map((x) => LEAD_PLAY_LABEL[x as LeadPlay]).join('|') || ''
+    },
+  },
   // 1 — Property Address (inline: 🆕 · address · TYPE · ⚠)
   {
     key: 'address',
