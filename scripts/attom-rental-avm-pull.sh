@@ -44,6 +44,10 @@ while IFS=$'\t' read -r id address zip; do
   psql "$PGURL" -q -c "INSERT INTO attom_call_log(endpoint, status_code, bytes, property_id, notes) VALUES('/valuation/rentalavm', 200, $bytes, '$id', 'rental avm pull');" >/dev/null 2>&1 || true
 
   # rentalavm endpoint returns fields under .rentalAvm (camelCase)
+  if echo "$resp" | jq -e '.Response.status.code == "401" or .Response.status.msg == "Unauthorized"' >/dev/null 2>&1; then
+    echo "  [$count/$LIMIT] $street — 401 RATE LIMIT, aborting"
+    exit 2
+  fi
   rent_value=$(echo "$resp" | jq -r '.property[0].rentalAvm.estimatedRentalValue // "NULL"' 2>/dev/null)
   rent_low=$(echo   "$resp" | jq -r '.property[0].rentalAvm.estimatedMinRentalValue // "NULL"' 2>/dev/null)
   rent_high=$(echo  "$resp" | jq -r '.property[0].rentalAvm.estimatedMaxRentalValue // "NULL"' 2>/dev/null)

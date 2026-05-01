@@ -62,6 +62,13 @@ while IFS=$'\t' read -r id address zip; do
   # Log call (best-effort)
   psql "$PGURL" -q -c "INSERT INTO attom_call_log(endpoint, status_code, bytes, property_id, notes) VALUES('/property/detailmortgageowner', 200, $bytes, '$id', 'comprehensive backfill');" >/dev/null 2>&1 || true
 
+  # Rate-limit guard: bail early on 401 to avoid burning more attempts
+  if echo "$resp" | jq -e '.Response.status.code == "401" or .Response.status.msg == "Unauthorized"' >/dev/null 2>&1; then
+    echo "  [$count/$LIMIT] $street — 401 RATE LIMIT HIT, aborting"
+    echo ""
+    echo "▸ ABORTED on rate limit at $count rows. ATTOM cap hit. Try again after reset."
+    exit 2
+  fi
   if echo "$resp" | jq -e '.Response.status.code == "404"' >/dev/null 2>&1; then
     echo "  [$count/$LIMIT] $street — endpoint 404"
     errors=$((errors + 1))

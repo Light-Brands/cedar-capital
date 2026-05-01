@@ -80,6 +80,12 @@ async function attomFetchSafe(path: string, params: Record<string, string> = {})
   if (res.status === 404 && /no rule matched/i.test(text)) {
     return { status: res.status, data: null, bytes, unentitled: true }
   }
+  // 401 from ATTOM is rate-limit on this trial (not auth — the key works for
+  // some endpoints but daily cap is exhausted). Surface it explicitly so
+  // callers can degrade gracefully instead of crashing the request.
+  if (res.status === 401) {
+    throw new Error(`ATTOM rate limit hit (HTTP 401). Daily cap exhausted; try again after reset.`)
+  }
   if (!res.ok) {
     throw new Error(`ATTOM API error ${res.status} on ${path}: ${text.slice(0, 200)}`)
   }

@@ -76,6 +76,14 @@ for zip in $ZIPS; do
     # Log call (best-effort, don't fail backfill if logging fails)
     psql "$PGURL" -q -c "INSERT INTO attom_call_log(endpoint, status_code, bytes, duration_ms, notes) VALUES('/sale/snapshot', 200, $bytes, $duration_ms, 'zip=$zip page=$page');" >/dev/null 2>&1 || true
 
+    # Rate-limit guard
+    if echo "$resp" | jq -e '.Response.status.code == "401" or .Response.status.msg == "Unauthorized"' >/dev/null 2>&1; then
+      echo "  $zip page $page — 401 RATE LIMIT, aborting"
+      echo ""
+      echo "▸ ABORTED on rate limit. ATTOM cap hit. Try again after reset."
+      exit 2
+    fi
+
     # Rows on this page
     page_count=$(echo "$resp" | jq -r '.property | length // 0' 2>/dev/null)
     if [ -z "$page_count" ] || [ "$page_count" = "null" ] || [ "$page_count" = "0" ]; then

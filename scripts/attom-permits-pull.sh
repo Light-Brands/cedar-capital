@@ -40,6 +40,10 @@ while IFS=$'\t' read -r id address zip; do
 
   psql "$PGURL" -q -c "INSERT INTO attom_call_log(endpoint, status_code, bytes, property_id, notes) VALUES('/property/buildingpermits', 200, $bytes, '$id', 'permits pull');" >/dev/null 2>&1 || true
 
+  if echo "$resp" | jq -e '.Response.status.code == "401" or .Response.status.msg == "Unauthorized"' >/dev/null 2>&1; then
+    echo "  [$count/$LIMIT] $street — 401 RATE LIMIT, aborting"
+    exit 2
+  fi
   attom_id=$(echo "$resp" | jq -r '.property[0].identifier.attomId // empty')
   permit_count=$(echo "$resp" | jq -r '.property[0].buildingPermits | length // 0' 2>/dev/null)
 
