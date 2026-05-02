@@ -95,7 +95,7 @@ export default function FavoritesPage() {
       <div>
         <h1 className="text-2xl font-heading font-bold text-cedar-green">⭐ Favorites</h1>
         <p className="text-charcoal/60 mt-1 text-sm">
-          Properties you've starred. Sorted by most-recently favorited.
+          Properties you&apos;ve starred. Sorted by most-recently favorited.
         </p>
       </div>
 
