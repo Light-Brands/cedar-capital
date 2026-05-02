@@ -14,6 +14,8 @@ import { classifyOwner } from '@/lib/analysis/owner-classifier'
 import { toZillowUrl, toRealtorUrl, toGoogleMapsUrl, toTcadUrl } from '@/lib/external-links'
 import type { DealBadge } from '@/lib/analysis/badge'
 import LeadPlayBadges from '@/components/dashboard/LeadPlayBadges'
+import FavoriteStar from '@/components/dashboard/FavoriteStar'
+import RenoSlider from '@/components/dashboard/RenoSlider'
 
 interface FullProperty extends Property {
   analyses: Analysis[]
@@ -190,7 +192,14 @@ export default function PropertyDetailPage() {
               </span>
             )}
           </div>
-          <h1 className="text-2xl font-heading font-bold text-cedar-green break-words">{property.address}</h1>
+          <div className="flex items-start gap-3">
+            <h1 className="text-2xl font-heading font-bold text-cedar-green break-words">{property.address}</h1>
+            <FavoriteStar
+              propertyId={property.id}
+              initial={(property as { is_favorite?: boolean }).is_favorite ?? false}
+              size="lg"
+            />
+          </div>
           <p className="text-charcoal/60 mt-1">
             {property.city}, {property.state} {property.zip_code}
             {property.county && ` · ${property.county} County`}
@@ -279,6 +288,15 @@ export default function PropertyDetailPage() {
           <AttomOwnerMortgageBlock property={property} />
           <RentalEstimateBlock property={property} />
           <PermitsBlock property={property} />
+
+          {/* Reno slider — operator sets rehab budget as % of ARV.
+              Triggers a re-analyze on commit so MAO/ROI/profit update inline. */}
+          <RenoSlider
+            propertyId={property.id}
+            initial={(property as { reno_override_pct?: number | null }).reno_override_pct ?? null}
+            arv={analysis?.arv ?? (property as { arv_mid?: number | null }).arv_mid ?? null}
+            onCommit={loadProperty}
+          />
 
           {/* Offer Range — prominent because this is the actionable number */}
           {offerTarget !== null && (

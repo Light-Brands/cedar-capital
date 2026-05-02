@@ -18,6 +18,7 @@ import { clsx } from 'clsx'
 import { supabase } from '@/lib/supabase/client'
 import LeadPlayBadges from '@/components/dashboard/LeadPlayBadges'
 import ScoreBadge from '@/components/dashboard/ScoreBadge'
+import FavoriteStar from '@/components/dashboard/FavoriteStar'
 import type { DealBadge } from '@/lib/analysis/badge'
 import { useLocalStorage } from '@/lib/use-local-storage'
 
@@ -50,6 +51,7 @@ type HotLead = {
   attom_permit_count: number | null
   years_since_permit: number | null
   mortgage_age_years: number | null
+  is_favorite?: boolean | null
 }
 
 /**
@@ -114,6 +116,8 @@ export default function HotLeadsPage() {
   useEffect(() => {
     async function load() {
       setLoading(true)
+      // hot_leads view doesn't include is_favorite; pull it from properties
+      // and merge in via a parallel query keyed on id.
       let query = supabase
         .from('hot_leads')
         .select('*')
@@ -124,8 +128,22 @@ export default function HotLeadsPage() {
         query = query.order('deal_score_numeric', { ascending: false, nullsFirst: false })
       }
       const { data, error: err } = await query.limit(200)
-      if (err) setError(err.message)
-      else setLeads((data ?? []) as HotLead[])
+      if (err) {
+        setError(err.message)
+        setLoading(false)
+        return
+      }
+      const leadsBase = (data ?? []) as HotLead[]
+      const ids = leadsBase.map((l) => l.id)
+      if (ids.length > 0) {
+        const { data: favRows } = await supabase
+          .from('properties')
+          .select('id, is_favorite')
+          .in('id', ids)
+        const favMap = new Map((favRows ?? []).map((r) => [r.id as string, !!(r as { is_favorite?: boolean }).is_favorite]))
+        for (const l of leadsBase) l.is_favorite = favMap.get(l.id) ?? false
+      }
+      setLeads(leadsBase)
       setLoading(false)
     }
     load()
@@ -133,6 +151,7 @@ export default function HotLeadsPage() {
 
   const filtered = useMemo(() => {
     if (filter === 'all') return leads
+    if (filter === 'favorites') return leads.filter((l) => l.is_favorite === true)
     return leads.filter((l) => l.description_categories?.includes(filter))
   }, [leads, filter])
 
@@ -171,7 +190,7 @@ export default function HotLeadsPage() {
       <div className="flex flex-wrap items-center gap-3">
         <div className="flex items-center gap-2 text-sm">
           <span className="text-charcoal/60">Filter</span>
-          {['all', 'distressed', 'multi_unit', 'mobile', 'land'].map((f) => (
+          {['all', 'favorites', 'distressed', 'multi_unit', 'mobile', 'land'].map((f) => (
             <button
               key={f}
               onClick={() => setFilter(f)}
@@ -180,9 +199,10 @@ export default function HotLeadsPage() {
                 filter === f
                   ? 'bg-cedar-green text-cream border-cedar-green'
                   : 'bg-white text-charcoal/70 border-stone/30 hover:bg-sand/40',
+                f === 'favorites' && filter !== f && 'text-capital-gold',
               )}
             >
-              {f === 'all' ? 'all' : f.replace('_', ' ')}
+              {f === 'all' ? 'all' : f === 'favorites' ? '⭐ favorites' : f.replace('_', ' ')}
             </button>
           ))}
         </div>
@@ -211,6 +231,7 @@ export default function HotLeadsPage() {
           <table className="w-full text-sm">
             <thead className="bg-sand/30">
               <tr>
+                <th className="px-2 py-2 w-8"></th>
                 <SortableTh sortKey="hot_score" active={sortKey} dir={sortDir} onSort={handleSort}
                   title="Seller Motivation 0-100. How likely is the owner to deal? Click to sort.">
                   Motivation
@@ -253,6 +274,17 @@ export default function HotLeadsPage() {
             <tbody>
               {filtered.map((l) => (
                 <tr key={l.id} className="border-t border-stone/15 hover:bg-cream/40">
+                  <td className="px-2 py-2">
+                    <FavoriteStar
+                      propertyId={l.id}
+                      initial={l.is_favorite ?? false}
+                      size="sm"
+                      onChange={(next) => {
+                        // Optimistically update local state so the star stays in sync without a full reload
+                        setLeads((prev) => prev.map((p) => p.id === l.id ? { ...p, is_favorite: next } : p))
+                      }}
+                    />
+                  </td>
                   <td className="px-3 py-2">
                     <span className={clsx(
                       'inline-block px-2 py-0.5 rounded font-bold text-xs',

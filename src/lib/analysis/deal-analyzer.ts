@@ -169,8 +169,39 @@ export function analyzeDeal(input: DealAnalysisInput): DealAnalysisResult {
   }
 
   // Step 2: Estimate rehab (apply overrides if provided)
+  // Priority order:
+  //   1. Operator-set reno_override_pct on the property (slider on detail page)
+  //   2. Explicit rehabOverride object passed to the analyzer
+  //   3. rehabLevel hint (light/medium/heavy)
+  //   4. Auto-inferred from property data
   let rehab = estimateRehab(property, input.rehabLevel)
-  if (input.rehabOverride) {
+  const renoOverridePct = (property as { reno_override_pct?: number | null }).reno_override_pct ?? null
+  if (renoOverridePct && renoOverridePct > 0 && arv > 0) {
+    // Slider override: rehab budget = ARV × pct/100, distributed across line items
+    // proportionally to the auto-estimate so the breakdown still feels grounded.
+    const target = arv * (renoOverridePct / 100)
+    const factor = rehab.total > 0 ? target / rehab.total : 0
+    rehab = {
+      ...rehab,
+      kitchen: Math.round(rehab.kitchen * factor),
+      bath: Math.round(rehab.bath * factor),
+      interiorPaint: Math.round(rehab.interiorPaint * factor),
+      exteriorPaint: Math.round(rehab.exteriorPaint * factor),
+      flooring: Math.round(rehab.flooring * factor),
+      windows: Math.round(rehab.windows * factor),
+      misc: Math.round(rehab.misc * factor),
+      roof: Math.round(rehab.roof * factor),
+      sheetrock: Math.round(rehab.sheetrock * factor),
+      framing: Math.round(rehab.framing * factor),
+      electrical: Math.round(rehab.electrical * factor),
+      plumbing: Math.round(rehab.plumbing * factor),
+      hvac: Math.round(rehab.hvac * factor),
+      landscape: Math.round(rehab.landscape * factor),
+      foundation: Math.round(rehab.foundation * factor),
+      other: Math.round(rehab.other * factor),
+      total: Math.round(target),
+    }
+  } else if (input.rehabOverride) {
     const overrides = input.rehabOverride
     rehab = { ...rehab, ...overrides }
     // Recalculate total if any line items were overridden
