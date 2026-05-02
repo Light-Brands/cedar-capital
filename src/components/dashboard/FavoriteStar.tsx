@@ -2,12 +2,11 @@
 
 import { useState } from 'react'
 import { clsx } from 'clsx'
-import { supabase } from '@/lib/supabase/client'
 
 /**
- * Favorite-star toggle. Single-tenant for now (boolean on properties row);
- * when auth lands, swap the supabase update for an upsert into a per-user
- * favorites table. The component API stays the same.
+ * Favorite-star toggle. Routes through POST /api/properties/:id/favorite
+ * because RLS blocks anon-key writes to the properties table from the
+ * browser. The server endpoint uses the service-role client.
  */
 export default function FavoriteStar({
   propertyId,
@@ -31,18 +30,20 @@ export default function FavoriteStar({
     const next = !favorited
     setFavorited(next) // optimistic
     onChange?.(next)
-    const { error } = await supabase
-      .from('properties')
-      .update({
-        is_favorite: next,
-        favorited_at: next ? new Date().toISOString() : null,
+    try {
+      const res = await fetch(`/api/properties/${propertyId}/favorite`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ favorited: next }),
       })
-      .eq('id', propertyId)
-    if (error) {
-      // revert on failure
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        throw new Error(data.error ?? `${res.status}`)
+      }
+    } catch (err) {
       setFavorited(!next)
       onChange?.(!next)
-      console.error('[favorite] toggle failed:', error.message)
+      console.error('[favorite] toggle failed:', err)
     }
     setBusy(false)
   }

@@ -2,7 +2,6 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { clsx } from 'clsx'
-import { supabase } from '@/lib/supabase/client'
 
 /**
  * Reno % slider — operator-set rehab budget as % of ARV.
@@ -12,11 +11,10 @@ import { supabase } from '@/lib/supabase/client'
  *   15-20% High Reno    (mechanicals + roof + windows on top of med)
  *   20-30% Gut Reno     (full interior + exterior, structural touch-ups)
  *
- * Persists to properties.reno_override_pct. The deal_analyzer reads this
- * column and overrides line-item rehab estimates when set.
- *
- * Triggers a re-analyze on commit so all the downstream numbers (rehab
- * total, MAO, ROI, est profit, deal score) update inline.
+ * Routes through POST /api/properties/:id/reno (server endpoint that
+ * persists the override AND re-runs the deal analyzer in one shot).
+ * Client-side Supabase writes were silently failing due to RLS — using
+ * the server route bypasses that with the service-role client.
  */
 
 const TIERS: Array<{ label: string; min: number; max: number; tone: string }> = [
@@ -56,30 +54,27 @@ export default function RenoSlider({
   async function commit(value: number) {
     setCommitting(true)
     setFeedback(null)
-    const { error: e1 } = await supabase
-      .from('properties')
-      .update({ reno_override_pct: value })
-      .eq('id', propertyId)
-    if (e1) {
-      setFeedback(`save failed: ${e1.message}`)
-      setCommitting(false)
-      return
-    }
-    // Trigger re-analyze on the server so all derived fields update
     try {
-      const res = await fetch(`/api/properties/${propertyId}/analyze`, { method: 'POST' })
+      // Single server call: persists the override AND re-runs the analyzer
+      // so the response carries the fresh rehab_total + analysis row.
+      const res = await fetch(`/api/properties/${propertyId}/reno`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pct: value }),
+      })
+      const data = await res.json().catch(() => ({}))
       if (!res.ok) {
-        const data = await res.json().catch(() => ({}))
-        setFeedback(`reno set to ${value}% but re-analyze failed: ${data.error ?? res.status}`)
+        setFeedback(`save failed: ${data.error ?? res.status}`)
       } else {
-        setFeedback(`Reno set to ${value}% · re-analyzed`)
+        const total = data.rehab_total ? `≈ $${Math.round(data.rehab_total).toLocaleString()}` : ''
+        setFeedback(`Reno set to ${value}% · re-analyzed ${total}`)
       }
     } catch (err) {
-      setFeedback(`reno set to ${value}% but re-analyze threw: ${err instanceof Error ? err.message : err}`)
+      setFeedback(`reno commit failed: ${err instanceof Error ? err.message : err}`)
     }
     setCommitting(false)
     onCommit?.()
-    setTimeout(() => setFeedback(null), 3000)
+    setTimeout(() => setFeedback(null), 4000)
   }
 
   function handleSlide(value: number) {
@@ -91,16 +86,25 @@ export default function RenoSlider({
 
   async function clear() {
     setPct(10)
-    const { error } = await supabase
-      .from('properties')
-      .update({ reno_override_pct: null })
-      .eq('id', propertyId)
-    if (!error) {
-      setFeedback('Reno override cleared · using auto-estimate')
-      try { await fetch(`/api/properties/${propertyId}/analyze`, { method: 'POST' }) } catch { /* swallow */ }
-      onCommit?.()
-      setTimeout(() => setFeedback(null), 3000)
+    setCommitting(true)
+    try {
+      const res = await fetch(`/api/properties/${propertyId}/reno`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pct: null }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (res.ok) {
+        setFeedback('Reno override cleared · using auto-estimate')
+        onCommit?.()
+        setTimeout(() => setFeedback(null), 4000)
+      } else {
+        setFeedback(`clear failed: ${data.error ?? res.status}`)
+      }
+    } catch (err) {
+      setFeedback(`clear failed: ${err instanceof Error ? err.message : err}`)
     }
+    setCommitting(false)
   }
 
   return (
