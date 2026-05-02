@@ -35,17 +35,42 @@ echo ""
 
 # Pull focused list: ATTOM-enriched properties ordered by hot_score DESC.
 # Falls back to deal_score_numeric for properties not in hot_leads view.
+SCOPE="${SCOPE:-hot_leads}"  # 'hot_leads' (default) | 'attom_only'
+case "$SCOPE" in
+  hot_leads)
+    SOURCE_FROM="hot_leads h JOIN properties p ON p.id = h.id LEFT JOIN analyses a ON a.property_id = p.id"
+    ORDER_BY="h.hot_score DESC NULLS LAST"
+    ;;
+  attom_only)
+    SOURCE_FROM="properties p LEFT JOIN hot_leads h ON h.id = p.id LEFT JOIN analyses a ON a.property_id = p.id"
+    ORDER_BY="h.hot_score DESC NULLS LAST, a.deal_score_numeric DESC NULLS LAST"
+    ;;
+  *) echo "unknown SCOPE: $SCOPE" >&2; exit 1 ;;
+esac
+
+# Skip rows that already have verified RentCast comps unless FORCE_REFRESH=1
+SKIP_EXISTING="${FORCE_REFRESH:-0}"
+if [ "$SKIP_EXISTING" = "1" ]; then
+  EXIST_FILTER="TRUE"
+else
+  EXIST_FILTER="(a.comp_addresses IS NULL OR array_length(a.comp_addresses, 1) < 3 OR a.verified IS NOT TRUE)"
+fi
+
+ATTOM_FILTER="TRUE"
+if [ "$SCOPE" = "attom_only" ]; then
+  ATTOM_FILTER="p.attom_id IS NOT NULL"
+fi
+
+echo "▸ Scope: $SCOPE  |  Skip if comps exist: $([ "$SKIP_EXISTING" = "1" ] && echo no || echo yes)"
+
 ROWS=$(psql "$PGURL" -tAF $'\t' -c "
   SELECT p.id, p.address, p.city, p.state, p.zip_code, p.sqft
-  FROM properties p
-  LEFT JOIN hot_leads h ON h.id = p.id
-  LEFT JOIN analyses a ON a.property_id = p.id
-  WHERE p.attom_id IS NOT NULL
+  FROM $SOURCE_FROM
+  WHERE $ATTOM_FILTER
     AND p.zip_code IS NOT NULL
-    AND p.sqft IS NOT NULL
-  ORDER BY
-    h.hot_score DESC NULLS LAST,
-    a.deal_score_numeric DESC NULLS LAST
+    AND p.sqft IS NOT NULL AND p.sqft > 0
+    AND $EXIST_FILTER
+  ORDER BY $ORDER_BY
   LIMIT $LIMIT
 ")
 

@@ -19,6 +19,7 @@ import { supabase } from '@/lib/supabase/client'
 import LeadPlayBadges from '@/components/dashboard/LeadPlayBadges'
 import ScoreBadge from '@/components/dashboard/ScoreBadge'
 import type { DealBadge } from '@/lib/analysis/badge'
+import { useLocalStorage } from '@/lib/use-local-storage'
 
 type HotLead = {
   id: string
@@ -51,7 +52,29 @@ type HotLead = {
   mortgage_age_years: number | null
 }
 
-type SortKey = 'hot_score' | 'deal_score_numeric' | 'attom_lendable_equity' | 'arv_mid'
+/**
+ * Sortable columns. The string literal is the underlying SQL column name
+ * (or a derived view column) so it can be passed straight to .order().
+ *
+ * Default is `hot_score DESC` — Motivation gated by deal economics is the
+ * operator's most useful default per the multiplier in the SQL view.
+ * Profitability acts as a secondary sort within Motivation ties.
+ */
+type SortKey =
+  | 'hot_score'
+  | 'deal_score_numeric'
+  | 'address'
+  | 'asking_price'
+  | 'arv_mid'
+  | 'attom_avm_value'
+  | 'attom_ltv'
+  | 'attom_lendable_equity'
+  | 'gross_cap_rate_pct'
+  | 'attom_permit_count'
+  | 'mortgage_age_years'
+  | 'years_since_permit'
+
+type SortDir = 'asc' | 'desc'
 
 const CATEGORY_TONE: Record<string, string> = {
   auction:    'bg-red-50 text-red-800 border-red-300',
@@ -71,24 +94,42 @@ function fmtUSD(n: number | null | undefined): string {
 export default function HotLeadsPage() {
   const [leads, setLeads] = useState<HotLead[]>([])
   const [loading, setLoading] = useState(true)
-  const [sortKey, setSortKey] = useState<SortKey>('hot_score')
+  // Sort state persists across page loads so the operator's preference sticks
+  const [sortKey, setSortKey] = useLocalStorage<SortKey>('hotLeads.sortKey', 'hot_score')
+  const [sortDir, setSortDir] = useLocalStorage<SortDir>('hotLeads.sortDir', 'desc')
   const [filter, setFilter] = useState<string>('all')
   const [error, setError] = useState<string | null>(null)
+
+  // Click a column header to sort. Same column toggles direction; new column
+  // resets to DESC (most useful default for numeric columns; address gets ASC).
+  function handleSort(key: SortKey) {
+    if (key === sortKey) {
+      setSortDir(sortDir === 'desc' ? 'asc' : 'desc')
+    } else {
+      setSortKey(key)
+      setSortDir(key === 'address' ? 'asc' : 'desc')
+    }
+  }
 
   useEffect(() => {
     async function load() {
       setLoading(true)
-      const { data, error: err } = await supabase
+      let query = supabase
         .from('hot_leads')
         .select('*')
-        .order(sortKey, { ascending: false, nullsFirst: false })
-        .limit(200)
+        .order(sortKey, { ascending: sortDir === 'asc', nullsFirst: false })
+      // Tie-breaker: when sorting by Motivation, fall through to Profitability
+      // so the more profitable lead floats up within the same motivation tier.
+      if (sortKey === 'hot_score') {
+        query = query.order('deal_score_numeric', { ascending: false, nullsFirst: false })
+      }
+      const { data, error: err } = await query.limit(200)
       if (err) setError(err.message)
       else setLeads((data ?? []) as HotLead[])
       setLoading(false)
     }
     load()
-  }, [sortKey])
+  }, [sortKey, sortDir])
 
   const filtered = useMemo(() => {
     if (filter === 'all') return leads
@@ -126,21 +167,8 @@ export default function HotLeadsPage() {
         <Stat label="High equity (≤30% LTV)" value={stats.highEquity.toString()} tone="emerald" />
       </div>
 
-      {/* Controls */}
+      {/* Controls — filters + active-sort indicator */}
       <div className="flex flex-wrap items-center gap-3">
-        <div className="flex items-center gap-2 text-sm">
-          <span className="text-charcoal/60">Sort by</span>
-          <select
-            value={sortKey}
-            onChange={(e) => setSortKey(e.target.value as SortKey)}
-            className="border border-stone/30 rounded-lg px-2 py-1 bg-white"
-          >
-            <option value="hot_score">Seller Motivation</option>
-            <option value="deal_score_numeric">Profitability</option>
-            <option value="attom_lendable_equity">Lendable equity</option>
-            <option value="arv_mid">ARV (mid)</option>
-          </select>
-        </div>
         <div className="flex items-center gap-2 text-sm">
           <span className="text-charcoal/60">Filter</span>
           {['all', 'distressed', 'multi_unit', 'mobile', 'land'].map((f) => (
@@ -158,6 +186,20 @@ export default function HotLeadsPage() {
             </button>
           ))}
         </div>
+        <div className="flex items-center gap-2 text-xs text-charcoal/50">
+          <span>Sorted by</span>
+          <span className="font-medium text-charcoal">
+            {SORT_LABELS[sortKey]} {sortDir === 'desc' ? '↓' : '↑'}
+          </span>
+          {(sortKey !== 'hot_score' || sortDir !== 'desc') && (
+            <button
+              onClick={() => { setSortKey('hot_score'); setSortDir('desc') }}
+              className="text-cedar-green hover:underline"
+            >
+              reset to Motivation ↓
+            </button>
+          )}
+        </div>
       </div>
 
       {error && <div className="bg-red-50 border border-red-300 text-red-800 rounded-card p-3 text-sm">{error}</div>}
@@ -169,24 +211,43 @@ export default function HotLeadsPage() {
           <table className="w-full text-sm">
             <thead className="bg-sand/30">
               <tr>
-                <Th title="Seller Motivation 0-100. How likely is the owner to deal? REO, equity, absenteeism, distress, multi-unit, deferred permits.">
+                <SortableTh sortKey="hot_score" active={sortKey} dir={sortDir} onSort={handleSort}
+                  title="Seller Motivation 0-100. How likely is the owner to deal? Click to sort.">
                   Motivation
-                </Th>
-                <Th>Address</Th>
+                </SortableTh>
+                <SortableTh sortKey="address" active={sortKey} dir={sortDir} onSort={handleSort}>
+                  Address
+                </SortableTh>
                 <Th>Beds/Baths/Sqft</Th>
-                <Th align="right">Asking</Th>
-                <Th align="right">ARV mid</Th>
-                <Th align="right">AVM</Th>
-                <Th align="right">LTV</Th>
-                <Th align="right">Equity</Th>
+                <SortableTh sortKey="asking_price" active={sortKey} dir={sortDir} onSort={handleSort} align="right">
+                  Asking
+                </SortableTh>
+                <SortableTh sortKey="arv_mid" active={sortKey} dir={sortDir} onSort={handleSort} align="right">
+                  ARV mid
+                </SortableTh>
+                <SortableTh sortKey="attom_avm_value" active={sortKey} dir={sortDir} onSort={handleSort} align="right">
+                  AVM
+                </SortableTh>
+                <SortableTh sortKey="attom_ltv" active={sortKey} dir={sortDir} onSort={handleSort} align="right">
+                  LTV
+                </SortableTh>
+                <SortableTh sortKey="attom_lendable_equity" active={sortKey} dir={sortDir} onSort={handleSort} align="right">
+                  Equity
+                </SortableTh>
                 <Th>Cond</Th>
                 <Th align="right">Rent</Th>
-                <Th align="right">Cap%</Th>
-                <Th align="right">Perms</Th>
+                <SortableTh sortKey="gross_cap_rate_pct" active={sortKey} dir={sortDir} onSort={handleSort} align="right">
+                  Cap%
+                </SortableTh>
+                <SortableTh sortKey="attom_permit_count" active={sortKey} dir={sortDir} onSort={handleSort} align="right"
+                  title="Permit count. 0 or null = deferred maintenance signal.">
+                  Perms
+                </SortableTh>
                 <Th>Tags</Th>
-                <Th align="right" title="Profitability 0-100. Does the deal math work? ROI, wholesale spread, ARV vs asking, comp confidence.">
+                <SortableTh sortKey="deal_score_numeric" active={sortKey} dir={sortDir} onSort={handleSort} align="right"
+                  title="Profitability 0-100. Does the deal math work? Click to sort.">
                   Profitability
-                </Th>
+                </SortableTh>
               </tr>
             </thead>
             <tbody>
@@ -287,6 +348,61 @@ function Stat({ label, value, tone = 'green' }: { label: string; value: string; 
       <div className="text-xs uppercase tracking-wide opacity-70">{label}</div>
       <div className="text-2xl font-bold mt-0.5">{value}</div>
     </div>
+  )
+}
+
+/** Human-readable labels for the sort indicator strip + reset button */
+const SORT_LABELS: Record<SortKey, string> = {
+  hot_score: 'Motivation',
+  deal_score_numeric: 'Profitability',
+  address: 'Address',
+  asking_price: 'Asking',
+  arv_mid: 'ARV mid',
+  attom_avm_value: 'AVM',
+  attom_ltv: 'LTV',
+  attom_lendable_equity: 'Equity',
+  gross_cap_rate_pct: 'Cap rate',
+  attom_permit_count: 'Permits',
+  mortgage_age_years: 'Mortgage age',
+  years_since_permit: 'Years since permit',
+}
+
+function SortableTh({
+  children,
+  sortKey,
+  active,
+  dir,
+  onSort,
+  align = 'left',
+  title,
+}: {
+  children: React.ReactNode
+  sortKey: SortKey
+  active: SortKey
+  dir: SortDir
+  onSort: (key: SortKey) => void
+  align?: 'left' | 'right'
+  title?: string
+}) {
+  const isActive = active === sortKey
+  const arrow = isActive ? (dir === 'desc' ? '↓' : '↑') : ''
+  return (
+    <th
+      title={title ?? `Click to sort by ${SORT_LABELS[sortKey]}`}
+      onClick={() => onSort(sortKey)}
+      className={clsx(
+        'px-3 py-2 font-medium text-xs uppercase tracking-wide cursor-pointer select-none transition-colors hover:bg-sand/60',
+        align === 'right' ? 'text-right' : 'text-left',
+        isActive ? 'text-cedar-green bg-sand/40' : 'text-charcoal/60',
+      )}
+    >
+      <span className="inline-flex items-center gap-1">
+        {children}
+        <span className={clsx('text-xs', isActive ? 'opacity-100' : 'opacity-30')}>
+          {arrow || '↕'}
+        </span>
+      </span>
+    </th>
   )
 }
 
