@@ -276,8 +276,9 @@ export default function PropertyDetailPage() {
         <div className="space-y-4">
           {/* ARV Range — multi-signal range with confidence badge.
               Sits above What-to-Offer so the operator sees the uncertainty
-              underlying the offer math. */}
-          <ArvRangePanel property={property} />
+              underlying the offer math. Click any tile to commit that bound
+              as the ARV for downstream calculations (re-runs analyzer). */}
+          <ArvRangePanel property={property} onCommit={loadProperty} />
 
           {/* ATTOM block — AVM range, LTV, lendable equity, condition.
               Sits above TCAD because ATTOM's AVM is the more actionable
@@ -526,6 +527,7 @@ type AttomFields = {
   arv_high?: number | null
   arv_confidence?: 'high' | 'medium' | 'low' | null
   arv_calculated_at?: string | null
+  arv_bound?: 'low' | 'mid' | 'high' | null
   // Migration 008 — owner + mortgage + rental + permits
   attom_owner_name?: string | null
   attom_owner_mailing?: string | null
@@ -600,17 +602,56 @@ function DescriptionBlock({ property }: { property: FullProperty & AttomFields }
   )
 }
 
-function ArvRangePanel({ property }: { property: FullProperty & AttomFields }) {
+function ArvRangePanel({ property, onCommit }: { property: FullProperty & AttomFields; onCommit?: () => void }) {
   const low = property.arv_low ?? null
   const mid = property.arv_mid ?? null
   const high = property.arv_high ?? null
   const confidence = property.arv_confidence ?? null
+  // The selected bound — defaults to 'mid' visually if no override is set.
+  const boundField = (property as { arv_bound?: 'low' | 'mid' | 'high' | null }).arv_bound ?? null
+  const activeBound: 'low' | 'mid' | 'high' = boundField ?? 'mid'
+
+  const [committing, setCommitting] = useState<'low' | 'mid' | 'high' | null>(null)
+  const [feedback, setFeedback] = useState<string | null>(null)
+
   if (low === null && mid === null && high === null) return null
 
   const confidenceTone =
     confidence === 'high' ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
     : confidence === 'medium' ? 'bg-capital-gold/15 text-capital-gold border-capital-gold/30'
     : 'bg-stone-100 text-stone-600 border-stone-300'
+
+  async function pickBound(b: 'low' | 'mid' | 'high') {
+    if (committing) return
+    setCommitting(b)
+    setFeedback(null)
+    try {
+      const res = await fetch(`/api/properties/${property.id}/arv-bound`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ bound: b }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (res.ok) {
+        setFeedback(`Using ${b.toUpperCase()} ARV ≈ ${fmtUSD(data.arv)}`)
+        onCommit?.()
+        setTimeout(() => setFeedback(null), 4000)
+      } else {
+        setFeedback(`save failed: ${data.error ?? res.status}`)
+      }
+    } catch (err) {
+      setFeedback(`commit failed: ${err instanceof Error ? err.message : err}`)
+    }
+    setCommitting(null)
+  }
+
+  function tileClasses(bound: 'low' | 'mid' | 'high') {
+    const isActive = activeBound === bound
+    if (isActive) {
+      return 'bg-cedar-green/10 rounded-lg p-3 border-2 border-cedar-green cursor-pointer transition-all'
+    }
+    return 'bg-stone-50 rounded-lg p-3 border-2 border-transparent hover:border-cedar-green/30 hover:bg-cedar-green/5 cursor-pointer transition-all'
+  }
 
   return (
     <div className="bg-white border border-stone/30 rounded-card p-5">
@@ -623,23 +664,34 @@ function ArvRangePanel({ property }: { property: FullProperty & AttomFields }) {
         )}
       </div>
       <div className="grid grid-cols-3 gap-2 text-center">
-        <div className="bg-stone-50 rounded-lg p-3">
-          <div className="text-[10px] text-charcoal/50 uppercase tracking-wide">Low</div>
-          <div className="font-bold text-cedar-green/70">{fmtUSD(low)}</div>
-        </div>
-        <div className="bg-cedar-green/5 rounded-lg p-3 border border-cedar-green/30">
-          <div className="text-[10px] text-cedar-green uppercase tracking-wide">Mid</div>
-          <div className="font-bold text-cedar-green text-lg">{fmtUSD(mid)}</div>
-        </div>
-        <div className="bg-stone-50 rounded-lg p-3">
-          <div className="text-[10px] text-charcoal/50 uppercase tracking-wide">High</div>
-          <div className="font-bold text-cedar-green/70">{fmtUSD(high)}</div>
-        </div>
+        <button onClick={() => pickBound('low')} className={tileClasses('low')} title="Use Low ARV — conservative, prices in worst-case comp scatter">
+          <div className="text-[10px] text-charcoal/60 uppercase tracking-wide font-semibold">Low</div>
+          <div className={clsx('font-bold', activeBound === 'low' ? 'text-cedar-green text-lg' : 'text-cedar-green/70')}>{fmtUSD(low)}</div>
+          {committing === 'low' && <div className="text-[9px] text-cedar-green animate-pulse">saving…</div>}
+        </button>
+        <button onClick={() => pickBound('mid')} className={tileClasses('mid')} title="Use Mid ARV — balanced default, blended ATTOM AVM + RentCast comps">
+          <div className="text-[10px] text-charcoal/60 uppercase tracking-wide font-semibold">Mid</div>
+          <div className={clsx('font-bold', activeBound === 'mid' ? 'text-cedar-green text-lg' : 'text-cedar-green/70')}>{fmtUSD(mid)}</div>
+          {committing === 'mid' && <div className="text-[9px] text-cedar-green animate-pulse">saving…</div>}
+        </button>
+        <button onClick={() => pickBound('high')} className={tileClasses('high')} title="Use High ARV — optimistic, prices in best comparable upside">
+          <div className="text-[10px] text-charcoal/60 uppercase tracking-wide font-semibold">High</div>
+          <div className={clsx('font-bold', activeBound === 'high' ? 'text-cedar-green text-lg' : 'text-cedar-green/70')}>{fmtUSD(high)}</div>
+          {committing === 'high' && <div className="text-[9px] text-cedar-green animate-pulse">saving…</div>}
+        </button>
       </div>
-      {low !== null && high !== null && mid && (
-        <div className="text-[10px] text-charcoal/50 mt-2 text-center">
-          range = ±{Math.round(((high - low) / mid) * 50)}% of mid
-        </div>
+      <div className="flex items-center justify-between mt-2 text-[10px] text-charcoal/50">
+        <span>
+          {boundField
+            ? <>Using <strong className="text-cedar-green">{boundField.toUpperCase()}</strong> ARV (operator-set)</>
+            : <>Using <strong>MID</strong> ARV by default</>}
+        </span>
+        {low !== null && high !== null && mid && (
+          <span>range ±{Math.round(((high - low) / mid) * 50)}%</span>
+        )}
+      </div>
+      {feedback && (
+        <div className="text-[10px] text-cedar-green mt-1 text-right">{feedback}</div>
       )}
     </div>
   )

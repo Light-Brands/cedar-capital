@@ -136,13 +136,29 @@ export function analyzeDeal(input: DealAnalysisInput): DealAnalysisResult {
   // Parcel-mismatch check protects condos/townhomes from TCAD's whole-building
   // market_value. ATTOM AVM is per-unit so it's not subject to that pitfall.
   const propAttom = property as unknown as {
+    arv_low?: number | null
     arv_mid?: number | null
+    arv_high?: number | null
+    arv_bound?: 'low' | 'mid' | 'high' | null
     attom_avm_value?: number | null
     attom_condition?: string | null
     attom_lendable_equity?: number | null
     attom_ltv?: number | null
   }
+
+  // Operator-set ARV bound takes priority over the auto-blended mid.
+  // When set, use arv_low / arv_mid / arv_high directly so all downstream
+  // numbers (MAO, ROI, profit, deal score) reflect the chosen bound.
   let arv = input.arv ?? 0
+  if (!arv && propAttom.arv_bound) {
+    const boundValue =
+      propAttom.arv_bound === 'low'  ? propAttom.arv_low :
+      propAttom.arv_bound === 'high' ? propAttom.arv_high :
+                                        propAttom.arv_mid
+    if (boundValue && boundValue > 0) {
+      arv = boundValue
+    }
+  }
   if (!arv && compAnalysis?.estimatedARV) {
     arv = compAnalysis.estimatedARV
   }
